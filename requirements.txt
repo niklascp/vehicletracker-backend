@@ -1,0 +1,7 @@
+numpy
+pandas
+geopandas
+psycopg2
+scikit-learn
+pika
+flask
