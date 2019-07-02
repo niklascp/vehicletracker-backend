@@ -148,7 +148,7 @@ class EventQueue():
                 'eventType': f'service.{service_name}',
                 'serviceData': service_data
             },
-            reply_to = self.callback_queue
+            reply_to = self.callback_queue,
             correlation_id = correlation_id
         )
 
