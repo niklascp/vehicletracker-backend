@@ -1,0 +1,3 @@
+from .WeeklyHistoricalAverage import WeeklyHistoricalAverage
+from .WeeklyKernelInterpolation import WeeklyKernelInterpolation
+from .WeeklySvr import WeeklySvr
