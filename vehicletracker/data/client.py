@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import json
 
 from sqlalchemy import create_engine 
 
@@ -20,6 +21,15 @@ class PostgresClient:
         
     def connection(self):
         return self.conn
+
+    def log_event(self, event, event_uuid = None):
+        with self.conn.connect() as conn:
+            sql = "insert into sys_events(event_type, event_json, event_uuid) values (%(event_type)s, %(event_json)s, %(event_uuid)s);"
+            conn.execute(sql, {
+                'event_type': event['eventType'],
+                'event_json': json.dumps(event),
+                'event_uuid': event_uuid
+            })
 
     def calendar(self, from_date, to_date):
         sql = "select date, weekday, day_type, statutory_holiday from cal_calendar where %(from)s <= date and date < %(to)s"

@@ -1,6 +1,7 @@
 numpy
 pandas
 geopandas
+sqlalchemy
 psycopg2
 scikit-learn
 pika
