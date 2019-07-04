@@ -104,7 +104,7 @@ class ServiceQueue():
 
     def receive_client(self):
         while not self.stop_event.is_set():
-            with self.client_queue.get_receiver as batch:
+            with self.client_queue.get_receiver() as batch:
                 while not self.stop_event.is_set():
                     for msg in batch.fetch_next(timeout=5):
                         try:
