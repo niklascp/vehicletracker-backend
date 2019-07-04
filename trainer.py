@@ -92,12 +92,13 @@ def schedule_train_link_model(data):
     return { 'jobId': job_runner.add_job(train, data)['jobId'] }
     
 def train(data):
-    link_ref = data['linkRef']
-    model_name = data['model']  
+    import pandas as pd    
+    
+    link_ref = data['linkRef']    
+    time = pd.to_datetime(data.get('time') or pd.datetime.now())
+    model_name = data['model']
     model_parameters = data.get('parameters', {})
-    _LOGGER.debug(f"Train link model for '{link_ref}' using model '{model_name}'.")
-
-    import pandas as pd
+    _LOGGER.debug(f"Train link model for '{link_ref}' using model '{model_name}'.")   
 
     from vehicletracker.data.client import PostgresClient
     from vehicletracker.models import WeeklySvr
@@ -107,8 +108,6 @@ def train(data):
     data = PostgresClient()
 
     n = model_parameters.get('n', 21)
-    time = pd.to_datetime(model_parameters.get('time') or pd.datetime.now())
-    print(link_ref, time, n)
     train = data.link_travel_time_n_preceding_normal_days(link_ref, time, n)
     _LOGGER.debug(f"Loaded train data: {train.shape[0]}")
 
