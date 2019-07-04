@@ -50,76 +50,81 @@ class ServiceQueue():
 
     def receive_worker(self):
         while not self.stop_event.is_set():
-            with self.worker_subscription.get_receiver(idle_timeout = 5) as batch:
-                for msg in batch:
-                    try:
-                        event = json.loads(str(msg))
-                        event_type = event['eventType']
-                        if msg.properties.correlation_id:
-                            correlation_id = msg.properties.correlation_id.decode('utf-8') 
-                        if msg.properties.reply_to:
-                            reply_to = msg.properties.reply_to.decode('utf-8') 
+            with self.worker_subscription.get_receiver() as batch:
+                while not self.stop_event.is_set():
+                    for msg in batch.fetch_next(timeout=5):
+                        try:
+                            event = json.loads(str(msg))
+                            event_type = event['eventType']
+                            if msg.properties.correlation_id:
+                                correlation_id = msg.properties.correlation_id.decode('utf-8') 
+                            if msg.properties.reply_to:
+                                reply_to = msg.properties.reply_to.decode('utf-8') 
 
-                        if reply_to:
-                            reply_to_queue = self.sb_client.get_queue(reply_to)
+                            if reply_to:
+                                reply_to_queue = self.sb_client.get_queue(reply_to)
 
-                        target_list = self.listeners.get(event_type, []) + self.listeners.get('*', [])
+                            target_list = self.listeners.get(event_type, []) + self.listeners.get('*', [])
 
-                        _LOGGER.debug(f"handling {event_type} with {len(target_list)} targets (correlation_id: {correlation_id})")
+                            _LOGGER.debug(f"handling {event_type} with {len(target_list)} targets (correlation_id: {correlation_id})")
 
-                        for target in target_list:
-                            # TODO: Wrap targets in exception logging and execute async.
-                            try:
-                                #task_runner.async_add_job(target, *args)
-                                result_data = target(event)
+                            for target in target_list:
+                                # TODO: Wrap targets in exception logging and execute async.
+                                try:
+                                    #task_runner.async_add_job(target, *args)
+                                    result_data = target(event)
 
-                                if reply_to:
-                                    self.send(
-                                        to = reply_to_queue, 
-                                        event = {
-                                            'eventType': 'reply',
-                                            'data': result_data
-                                        },
-                                        correlation_id = correlation_id)
-                            except Exception as e:
-                                _LOGGER.exception('error in executing listerner')
-                                self.publish_event({
-                                        'eventType': 'error',
-                                        'error': str(e)
-                                    })
-                                if reply_to:
-                                    self.send(
-                                        to = reply_to_queue, 
-                                        event = {
-                                            'eventType': 'reply',
-                                            'data': result_data
-                                        },
-                                        correlation_id = correlation_id)
-                    except Exception:
-                        _LOGGER.exception('error in receive_worker message loop')
-                    finally:
-                        msg.complete()
+                                    if reply_to:
+                                        self.send(
+                                            to = reply_to_queue, 
+                                            event = {
+                                                'eventType': 'reply',
+                                                'data': result_data
+                                            },
+                                            correlation_id = correlation_id)
+                                except Exception as e:
+                                    _LOGGER.exception('error in executing listerner')
+                                    self.publish_event({
+                                            'eventType': 'error',
+                                            'error': str(e)
+                                        })
+                                    if reply_to:
+                                        self.send(
+                                            to = reply_to_queue, 
+                                            event = {
+                                                'eventType': 'reply',
+                                                'data': result_data
+                                            },
+                                            correlation_id = correlation_id)
+                            msg.complete()
+                        except Exception:
+                            _LOGGER.exception('error in receive_worker message loop')
+                        #finally:
+                        #    msg.complete()
 
     def receive_client(self):
         while not self.stop_event.is_set():
-            with self.client_queue.get_receiver(idle_timeout = 5) as batch:
-                for msg in batch: 
-                    try:
-                        event = json.loads(str(msg))
-                        event_type = event['eventType']
-                        correlation_id = msg.properties.correlation_id.decode('utf-8') 
-                        
-                        _LOGGER.debug(f"handling {event_type} (correlation_id: {correlation_id})")
+            with self.client_queue.get_receiver as batch:
+                while not self.stop_event.is_set():
+                    for msg in batch.fetch_next(timeout=5):
+                        try:
+                            event = json.loads(str(msg))
+                            event_type = event['eventType']
+                            correlation_id = msg.properties.correlation_id.decode('utf-8') 
+                            
+                            _LOGGER.debug(f"handling {event_type} (correlation_id: {correlation_id})")
 
-                        if correlation_id:
-                            wait_event = self.wait_events.pop(correlation_id, None)
-                            if wait_event:
-                                self.results[correlation_id] = event.get('data')
-                                wait_event.set()
-                    except Exception:
-                        _LOGGER.exception('error in receive_client message loop')
-                    finally:
-                        msg.complete()
+                            if correlation_id:
+                                wait_event = self.wait_events.pop(correlation_id, None)
+                                if wait_event:
+                                    self.results[correlation_id] = event.get('data')
+                                    wait_event.set()
+                            
+                            msg.complete()
+                        except Exception:
+                            _LOGGER.exception('error in receive_client message loop')
+                        #finally:
+                        #    msg.complete()
 
     def listen(self, event_type: str, target: Callable[..., Any]) -> Callable[[], None]:
         _LOGGER.info(f"listening for {event_type}.")
