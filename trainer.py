@@ -41,10 +41,13 @@ class LocalJobRunner(object):
             _LOGGER.info(f"Starting background job '{job_id}'.")
             try:
                 job['status'] = 'running'
+                job['started'] = datetime.now().isoformat()
                 job['result'] = target(job['data'])
                 job['status'] = 'completed'
+                job['stopped'] = datetime.now().isoformat()
             except Exception as e:
                 job['status'] = 'failed'
+                job['stopped'] = datetime.now().isoformat()
                 job['error'] = str(e)
                 _LOGGER.exception('error in worker loop')
             
