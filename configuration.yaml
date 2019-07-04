@@ -1,0 +1,47 @@
+logging:
+  version: 1
+  disable_existing_loggers: true
+  formatters:
+    brief:
+      format: '%(levelname)-8s; %(name)-35s; %(message)s'
+      datefmt: "%I:%M:%S"
+    standard:
+      format: '%(asctime)s; %(levelname)-8s; %(name)-35s; %(funcName)-20s;%(lineno)4d: %(message)s'
+      datefmt: "%I:%M:%S"
+    multi_process:
+      class: 'logging.Formatter'
+      format: '%(asctime)s; %(levelname)-8s; [%(thread;)s]; %(name)-35s; %(funcName)-20s;%(lineno)-4d: %(message)s'
+    multi_thread:
+      class: 'logging.Formatter'
+      format: '%(asctime)s; %(levelname)-8s; [%(process)d]; %(name)-35s; %(funcName)-20s;%(lineno)-4d: %(message)s'
+    verbose:
+      class: 'logging.Formatter'
+      format: '%(asctime)s; %(levelname)-8s; [%(process)d - %(thread)s]; %(name)-35s; %(funcName)-20s;%(lineno)4d: %(message)s'
+  handlers:
+    console:
+      level: 'DEBUG'
+      class: 'logging.StreamHandler'
+      formatter: 'standard'
+    file_handler:
+      level: 'DEBUG'
+      class: 'logging.handlers.TimedRotatingFileHandler'
+      formatter: 'verbose'
+      filename: './logs/log.log'
+      when: midnight
+      encoding: 'utf-8'
+  loggers:
+    vehicletracker:
+      level: 'DEBUG'
+    vehicletracker.trainer:
+      level: 'DEBUG'
+    vehicletracker.azure:
+      level: 'DEBUG'
+    vehicletracker.azure.events:
+      level: 'INFO'
+    vehicletracker.azure.services:
+      level: 'INFO'
+  root:
+    level: 'INFO'
+    handlers:
+      - 'console'
+      - 'file_handler'

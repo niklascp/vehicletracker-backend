@@ -1,44 +1,41 @@
 import os
-import pika
-import json
+import logging
+from logging.handlers import TimedRotatingFileHandler
 
+from vehicletracker.azure.events import EventHubsQueue
 from vehicletracker.data.client import PostgresClient
-from vehicletracker.consts.events import *
 
-EVENTS_EXCHANGE_NAME = 'vehicletracker-events'
+event_queue = EventHubsQueue(consumer_group = 'recorder')
+
+_LOGGER = logging.getLogger('vehicletraker.recorder')
 
 def main():
-    credentials = pika.PlainCredentials(
-        username = os.environ['RABBITMQ_USERNAME'],
-        password = os.environ['RABBITMQ_PASSWORD'])
+    if not os.path.exists('./logs'):
+        os.makedirs('./logs')
+    logHandler = TimedRotatingFileHandler("./logs/recorder.log", when="midnight")
+    logFormatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logHandler.setFormatter(logFormatter)
+    _LOGGER.addHandler(logHandler)
+    _LOGGER.setLevel(logging.DEBUG)
 
-    parameters = pika.ConnectionParameters(
-        host = os.environ['RABBITMQ_ADDRESS'],
-        port = os.getenv('RABBITMQ_PORT', 5672),
-        virtual_host='/',
-        credentials=credentials)
-
-    connection = pika.BlockingConnection(parameters)
-    channel = connection.channel()
+    for l_ in ['vehicletracker.data.events', 'vehicletracker.azure.events']:
+        l = logging.getLogger(l_)
+        l.addHandler(logHandler)
+        l.setLevel(logging.DEBUG)
 
     state_store = PostgresClient()    
 
-    def callback(ch, method, properties, body):
-        if properties.content_type == 'application/json':
-            event = json.loads(body)
-            uuid = properties.correlation_id
-            state_store.log_event(event, uuid)
+    def log_event(event):
+        uuid = event.get('correlationId')
+        state_store.log_event(event, uuid)
 
-    queue_result = channel.queue_declare(queue = '', exclusive=True)
+    event_queue.listen('*', log_event)
+    event_queue.start()
 
-    channel.queue_bind(exchange=EVENTS_EXCHANGE_NAME, queue=queue_result.method.queue, routing_key='#')
+    input("Press Enter to exit...")
+    os._exit(0)
 
-    channel.basic_consume(
-        queue=queue_result.method.queue,
-        on_message_callback=callback,
-        auto_ack=True)
-
-    channel.start_consuming()
+    event_queue.stop()
 
 if __name__ == '__main__':
     main()

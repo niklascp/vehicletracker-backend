@@ -3,6 +3,7 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
+from vehicletracker.azure.events import EventHubsQueue
 from vehicletracker.consts.events import EVENT_LINK_PREDICT_REQUEST, EVENT_LINK_PREDICT_COMPLETED, EVENT_LINK_TRAIN_COMPLETED
 from vehicletracker.data.events import EventQueue
 
@@ -16,7 +17,8 @@ _LOGGER = logging.getLogger('vehicletraker.predictor')
 
 LINK_MODELS = {}
 
-event_queue = EventQueue(worker_queue_name = 'predictor')
+#event_queue = EventQueue(worker_queue_name = 'predictor')
+event_queue = EventHubsQueue(consumer_group = 'predictor')
 
 def predict(event):
     link_ref = event['linkRef']
@@ -29,12 +31,7 @@ def predict(event):
     ix = pd.DatetimeIndex([time])
     pred = model.predict(ix)
 
-    return {
-        'eventType': EVENT_LINK_PREDICT_COMPLETED,
-        'linkRef': link_ref,
-        'time': time.isoformat(),
-        'prediction': pred[0, 0]
-    }
+    return pred[0, 0]
 
 def main():
     if not os.path.exists('./logs'):
@@ -45,7 +42,7 @@ def main():
     _LOGGER.addHandler(logHandler)
     _LOGGER.setLevel(logging.DEBUG)
 
-    for l_ in ['vehicletracker.data.events']:
+    for l_ in ['vehicletracker.data.events', 'vehicletracker.azure.events']:
         l = logging.getLogger(l_)
         l.addHandler(logHandler)
         l.setLevel(logging.DEBUG)
@@ -78,6 +75,8 @@ def main():
     print(' [*] Waiting for events. To exit press CTRL+C')
 
     input("Press Enter to exit...")
+    event_queue.stop()
+
     os._exit(0)
 
     """
