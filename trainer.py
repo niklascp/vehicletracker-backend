@@ -7,7 +7,7 @@ import threading
 import queue
 
 from vehicletracker.data.client import PostgresClient
-from vehicletracker.azure.services import ServiceQueue
+from vehicletracker.data.events import EventQueue
 
 from datetime import datetime
 
@@ -19,7 +19,7 @@ import pandas as pd
 _LOGGER = logging.getLogger('vehicletracker.trainer')
 
 stop_event = threading.Event()
-service_queue = ServiceQueue(domain = 'trainer', worker = True)
+service_queue = EventQueue(domain = 'trainer')
 state_store = PostgresClient()  
 
 # TODO: This will only work with a single trainer

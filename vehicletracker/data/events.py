@@ -1,5 +1,6 @@
 import os
 import logging
+import socket
 import threading
 
 import uuid
@@ -15,8 +16,9 @@ _LOGGER = logging.getLogger(__name__)
 
 class EventQueue():    
 
-    def __init__(self, worker_queue_name):
-        self.worker_queue_name = worker_queue_name
+    def __init__(self, domain):
+        self.worker_queue_name = domain + '-worker'
+        self.callback_queue = domain + '-client-' + socket.gethostname()
 
         credentials = pika.PlainCredentials(
             username = os.environ['RABBITMQ_USERNAME'],
@@ -27,7 +29,7 @@ class EventQueue():
             port = os.getenv('RABBITMQ_PORT', 5672),
             virtual_host = os.getenv('RABBITMQ_VHOST', '/'),
             credentials = credentials)
-
+        
         # Declare connections and channel
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
@@ -40,16 +42,18 @@ class EventQueue():
         self.channel.exchange_declare(exchange = EVENTS_EXCHANGE_NAME, exchange_type = 'topic')
         self.channel.queue_declare(queue = self.worker_queue_name, auto_delete = True)
         
-        # Declare queue for service callbacks
-        result = self.channel.queue_declare(queue = '', exclusive = True)
-        self.callback_queue = result.method.queue
+        # Declare queue for service callbacks        
+        self.channel.queue_declare(queue = self.callback_queue, exclusive = True)
+        #result = self.channel.queue_declare(queue = '', exclusive = True)
+        #self.callback_queue = result.method.queue
         
         # Hook up consumers
         self.channel.basic_consume(queue = self.worker_queue_name, on_message_callback = self.event_callback, auto_ack = True)
         self.channel.basic_consume(queue = self.callback_queue, on_message_callback = self.reply_callback, auto_ack = True)
 
         self.thread = threading.Thread(target=self.channel.start_consuming)
-        self.services = {}
+        self.wait_events = {}
+        self.results = {}
         self.listeners = {}
 
     def publish_event(self, event, reply_to = None, correlation_id = None):
@@ -120,8 +124,17 @@ class EventQueue():
     def reply_callback(self, ch, method, properties, body):
         try:
             if properties.content_type == 'application/json':
-                event = json.loads(body)
+                data = json.loads(body)
+                #event_type = event['eventType']
                 correlation_id = properties.correlation_id
+
+                _LOGGER.debug(f"handling reply (correlation_id: {correlation_id})")	
+
+                if correlation_id:	
+                    wait_event = self.wait_events.pop(correlation_id, None)
+                    if wait_event:
+                        self.results[correlation_id] = data
+                        wait_event.set()
 
         except Exception:
             _LOGGER.exception('Error in reply_callback.')
@@ -143,6 +156,7 @@ class EventQueue():
 
     def call_service(self, service_name, service_data, timeout = 1000):
         correlation_id = str(uuid.uuid4())
+        self.wait_events[correlation_id] = threading.Event()
         self.publish_event(
             event = {
                 'eventType': f'service.{service_name}',
@@ -151,6 +165,19 @@ class EventQueue():
             reply_to = self.callback_queue,
             correlation_id = correlation_id
         )
+        try:
+            if self.wait_events[correlation_id].wait(timeout = timeout):
+                return self.results.pop(correlation_id)
+            else:
+                _LOGGER.info(f"call to {service_name} timed out.")
+        except:
+            raise
+        finally:
+            self.wait_events.pop(correlation_id, None)
 
     def start(self):
+        _LOGGER.info(f"event processing is starting")
         self.thread.start()
+
+    def stop(self):
+        pass
