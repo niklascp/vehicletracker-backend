@@ -6,5 +6,4 @@ psycopg2
 scikit-learn
 pika
 pyyaml
-azure-eventhub
-azure-servicebus
+pyodbc

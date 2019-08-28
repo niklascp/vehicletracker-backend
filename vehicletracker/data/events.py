@@ -24,37 +24,68 @@ class EventQueue():
             username = os.environ['RABBITMQ_USERNAME'],
             password = os.environ['RABBITMQ_PASSWORD'])
 
-        parameters = pika.ConnectionParameters(
+        self.parameters = pika.ConnectionParameters(
             host = os.getenv('RABBITMQ_ADDRESS', 'localhost'),
             port = os.getenv('RABBITMQ_PORT', 5672),
             virtual_host = os.getenv('RABBITMQ_VHOST', '/'),
             credentials = credentials)
         
-        # Declare connections and channel
-        self.connection = pika.BlockingConnection(parameters)
-        self.channel = self.connection.channel()
+        self.thread = None
+        self.cancel_event = None        
 
-        # Declare exchange / queue for service calls
-        # self.channel.exchange_declare(exchange = REQUESTS_EXCHANGE_NAME, exchange_type = 'topic')
-        # self.channel.queue_declare(queue = REQUESTS_QUEUE_NAME, auto_delete = True)
-        
-        # Declare exchange / queue for events
-        self.channel.exchange_declare(exchange = EVENTS_EXCHANGE_NAME, exchange_type = 'topic')
-        self.channel.queue_declare(queue = self.worker_queue_name, auto_delete = True)
-        
-        # Declare queue for service callbacks        
-        self.channel.queue_declare(queue = self.callback_queue, exclusive = True)
-        #result = self.channel.queue_declare(queue = '', exclusive = True)
-        #self.callback_queue = result.method.queue
-        
-        # Hook up consumers
-        self.channel.basic_consume(queue = self.worker_queue_name, on_message_callback = self.event_callback, auto_ack = True)
-        self.channel.basic_consume(queue = self.callback_queue, on_message_callback = self.reply_callback, auto_ack = True)
+        self.connection = None
+        self.channel = None
 
-        self.thread = threading.Thread(target=self.channel.start_consuming)
         self.wait_events = {}
         self.results = {}
         self.listeners = {}
+
+    def _consume(self):
+        while not self.cancel_event.isSet():
+            try:
+                _LOGGER.info('Connecting to RabbitMQ ...')
+
+                # Declare connections and channel
+                self.connection = pika.BlockingConnection(self.parameters)
+                self.channel = self.connection.channel()
+
+                # Declare exchange / queue for service calls
+                # self.channel.exchange_declare(exchange = REQUESTS_EXCHANGE_NAME, exchange_type = 'topic')
+                # self.channel.queue_declare(queue = REQUESTS_QUEUE_NAME, auto_delete = True)
+                        
+                # Declare exchange / queue for events
+                self.channel.exchange_declare(exchange = EVENTS_EXCHANGE_NAME, exchange_type = 'topic')
+                self.channel.queue_declare(queue = self.worker_queue_name, auto_delete = True)
+                
+                # Declare queue for service callbacks        
+                self.channel.queue_declare(queue = self.callback_queue, exclusive = True)
+                #result = self.channel.queue_declare(queue = '', exclusive = True)
+                #self.callback_queue = result.method.queue
+        
+                # Hook up consumers
+                self.channel.basic_consume(queue = self.worker_queue_name, on_message_callback = self.event_callback, auto_ack = True)
+                self.channel.basic_consume(queue = self.callback_queue, on_message_callback = self.reply_callback, auto_ack = True)
+
+                try:
+                    self.channel.start_consuming()
+                except KeyboardInterrupt:
+                    self.channel.stop_consuming()
+                    self.connection.close()
+                    break
+            
+            except pika.exceptions.ConnectionClosedByBroker:
+                # Recovery from server-initiated connection closure, including
+                # when the node is stopped cleanly
+                _LOGGER.info("Server-initiated connection closure, retrying...")
+                continue
+            # Do not recover on channel errors
+            except pika.exceptions.AMQPChannelError:
+                _LOGGER.exception("Caught a channel error, stopping...")
+                break
+            # Recover on all other connection errors
+            except pika.exceptions.AMQPConnectionError:
+                _LOGGER.exception("Connection was closed, retrying...")
+                continue
 
     def publish_event(self, event, reply_to = None, correlation_id = None):
         self.channel.basic_publish(
@@ -176,8 +207,27 @@ class EventQueue():
             self.wait_events.pop(correlation_id, None)
 
     def start(self):
-        _LOGGER.info(f"event processing is starting")
+        if self.thread:
+            _LOGGER.warning(f"Cannot start event processing, since it has already been started.")
+            return
+
+        _LOGGER.info(f"event processing is starting ...")
+        self.cancel_event = threading.Event()
+        self.thread = threading.Thread(target=self._consume)
+        self.thread.daemon = True
         self.thread.start()
 
     def stop(self):
-        pass
+        _LOGGER.info(f"event processing is stopping ...")
+
+        if self.cancel_event:
+            self.cancel_event.set()
+
+        if self.connection:
+            self.connection.close()
+
+        if self.thread:
+            self.thread.join(timeout=5) 
+
+        self.cancel_event = None
+        self.thread = None
