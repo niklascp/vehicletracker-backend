@@ -66,6 +66,12 @@ class EventQueue():
                 self.channel.basic_consume(queue = self.worker_queue_name, on_message_callback = self.event_callback, auto_ack = True)
                 self.channel.basic_consume(queue = self.callback_queue, on_message_callback = self.reply_callback, auto_ack = True)
 
+                for event_type in self.listeners.keys():
+                    self.channel.queue_bind(
+                        exchange = EVENTS_EXCHANGE_NAME,
+                        queue = self.worker_queue_name,
+                        routing_key = event_type)
+
                 try:
                     self.channel.start_consuming()
                 except KeyboardInterrupt:
@@ -174,10 +180,11 @@ class EventQueue():
         _LOGGER.info(f"listening for {event_type}.")
         if event_type not in self.listeners:
             self.listeners[event_type] = []
-            self.channel.queue_bind(
-                exchange = EVENTS_EXCHANGE_NAME,
-                queue = self.worker_queue_name,
-                routing_key = event_type)
+            if self.channel:
+                self.channel.queue_bind(
+                    exchange = EVENTS_EXCHANGE_NAME,
+                    queue = self.worker_queue_name,
+                    routing_key = event_type)
 
         self.listeners[event_type].append(target)
     
