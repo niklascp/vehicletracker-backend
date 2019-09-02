@@ -1,8 +1,10 @@
 __pycache__/
 .env/
+.venv/
 .vscode/
 .vs/
 logs/
 cache/
 *.whl
 *.ps1
+*.sh
