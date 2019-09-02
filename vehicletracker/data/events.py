@@ -3,6 +3,7 @@ import logging
 import socket
 import threading
 
+import time
 import uuid
 
 import pika
@@ -91,6 +92,9 @@ class EventQueue():
                 continue
 
     def publish_event(self, event, reply_to = None, correlation_id = None):
+        while self.channel == None:
+            time.sleep(0.1)
+
         self.channel.basic_publish(
             exchange = EVENTS_EXCHANGE_NAME,
             routing_key = event['eventType'],
@@ -103,6 +107,9 @@ class EventQueue():
         )
 
     def publish_reply(self, data, to = None, correlation_id = None):
+        while self.channel == None:
+            time.sleep(0.1)
+            
         self.channel.basic_publish(
             exchange = '',
             routing_key = to,
