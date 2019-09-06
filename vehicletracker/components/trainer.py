@@ -6,6 +6,7 @@ import logging.config
 import threading
 import queue
 
+from vehicletracker.exceptions import ApplicationError
 from vehicletracker.helpers.events import EventQueue
 
 from datetime import datetime
@@ -90,13 +91,13 @@ def schedule_train_link_model(data):
     _LOGGER.debug(f"Scheduling 'link model train' for link '{link_ref}' using model '{model_name}'.")
     return { 'jobId': job_runner.add_job(train, data)['jobId'] }
     
-def train(data):
+def train(params):
     import pandas as pd    
     
-    link_ref = data['linkRef']    
-    time = pd.to_datetime(data.get('time') or pd.datetime.now())
-    model_name = data['model']
-    model_parameters = data.get('parameters', {})
+    link_ref = params['linkRef']    
+    time = pd.to_datetime(params.get('time') or pd.datetime.now())
+    model_name = params['model']
+    model_parameters = params.get('parameters', {})
     _LOGGER.debug(f"Train link model for '{link_ref}' using model '{model_name}'.")   
 
     from vehicletracker.models import WeeklySvr
@@ -104,11 +105,19 @@ def train(data):
     import joblib
 
     n = model_parameters.get('n', 21)
-    train = pd.DataFrame(service_queue.call_service('link_travel_time_n_preceding_normal_days', {
+    train_data = service_queue.call_service('link_travel_time_n_preceding_normal_days', {
         'linkRef': link_ref,
         'time': time.isoformat(),
         'n': n
-    }, timeout = 5))
+    }, timeout = 5)
+
+    if 'error' in train_data:
+        raise ApplicationError(f"error getting train data: {train_data['error']}")
+
+    if len(train_data['time']) == 0:
+        raise ApplicationError(f"no train data returned for '{link_ref}' (time: {time.isoformat()}, {n})")
+
+    train = pd.DataFrame(train_data)
     train.index = pd.to_datetime(train['time'].cumsum(), unit='s')
     train.drop(columns = 'time', inplace=True)
     _LOGGER.debug(f"Loaded train data: {train.shape[0]}")
@@ -126,6 +135,7 @@ def train(data):
         'model': model_name,
         'linkRef': link_ref,
         'time': time.isoformat(),
+        'trained': datetime.now().isoformat()
     }
 
     # Write metadata

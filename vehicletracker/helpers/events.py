@@ -138,7 +138,7 @@ class EventQueue():
         self.publish_internal_with_retry(
             exchange = '',
             routing_key = to,
-            body = json.dumps(data) if content_type is content_type == 'application/json' else data,
+            body = json.dumps(data) if content_type == 'application/json' else data,
             content_type = content_type,
             correlation_id = correlation_id
         )
@@ -243,9 +243,10 @@ class EventQueue():
                     return body, content_type
             else:
                 _LOGGER.warn(f"call to '{service_name}' timed out.")
+                return { 'error': 'timeout' }
         except:
             _LOGGER.exception(f"call service '{service_name}' failed.")
-            return None
+            return { 'error': 'failed' }
         finally:
             self.wait_events.pop(correlation_id, None)
 

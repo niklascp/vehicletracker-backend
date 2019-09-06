@@ -42,7 +42,7 @@ class LocalTravelTimeHistory():
 
         result = {
             'time': np.diff(np.hstack((0, data.index.astype(np.int64) // 10**9))).tolist(),
-            'link_travel_time': data['link_travel_time'].values
+            'link_travel_time': data['link_travel_time'].values.tolist()
         }
 
         _LOGGER.debug(f"returning {len(data)} results")
