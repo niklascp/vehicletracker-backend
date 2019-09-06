@@ -96,9 +96,10 @@ class EventQueue():
                 continue
 
     def ensure_connection(self): 
-        _LOGGER.info('client connecting to RabbitMQ ...')
-        self.connection = pika.BlockingConnection(self.parameters)
-        self.channel = self.connection.channel()
+        if self.connection is None:
+            _LOGGER.info('client connecting to RabbitMQ ...')
+            self.connection = pika.BlockingConnection(self.parameters)
+            self.channel = self.connection.channel()
 
     def publish_internal_with_retry(self, exchange, routing_key, body, content_type, reply_to = None, correlation_id = None, retry_count = 3):
         retry = 0
@@ -119,6 +120,7 @@ class EventQueue():
             except Exception:
                 retry = retry + 1
                 _LOGGER.warn('failed to publish_event (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id}, retry {retry})')
+                self.connection = None
 
         _LOGGER.error('all attempts failed to publish_event (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id})')
 

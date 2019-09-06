@@ -3,11 +3,9 @@ import os
 import logging
 import logging.config
 
-import threading
-import queue
-
 from vehicletracker.exceptions import ApplicationError
 from vehicletracker.helpers.events import EventQueue
+from vehicletracker.helpers.job_runner import LocalJobRunner
 
 from datetime import datetime
 
@@ -17,67 +15,6 @@ import json
 import pandas as pd
 
 _LOGGER = logging.getLogger(__name__)
-
-# TODO: This will only work with a single trainer
-class LocalJobRunner(object):
-
-    def __init__(self):
-        self.job_id = 0      
-        self.jobs = [] 
-        self.pending_jobs = queue.Queue()
-        self.stop_event = threading.Event()
-        self.threads = []
-
-    def worker(self):
-        while not self.stop_event.is_set():
-            try:
-                item = self.pending_jobs.get(block=True, timeout=1)
-            except queue.Empty:
-                continue
-
-            job, target = item
-            job_id = job['jobId']
-            _LOGGER.info(f"Starting background job '{job_id}'.")
-            try:
-                job['status'] = 'running'
-                job['started'] = datetime.now().isoformat()
-                job['result'] = target(job['data'])
-                job['status'] = 'completed'
-                job['stopped'] = datetime.now().isoformat()
-            except Exception as e:
-                job['status'] = 'failed'
-                job['stopped'] = datetime.now().isoformat()
-                job['error'] = str(e)
-                _LOGGER.exception('error in worker loop')
-            
-            self.pending_jobs.task_done()
-
-    def start(self):
-        _LOGGER.info(f"local job runner is starting")
-        assert(len(self.threads) == 0)     
-        for i in range(1):
-            t = threading.Thread(target=self.worker)
-            t.deamon = True
-            t.start()
-            self.threads.append(t)
-
-    def stop(self):
-        _LOGGER.info(f"local job runner is stopping")
-        self.stop_event.set()
-        for t in self.threads:
-            t.join(1)
-        self.threads = []
-
-    def add_job(self, target, data):
-        self.job_id = self.job_id + 1
-        job = {
-            'jobId': self.job_id,
-            'status': 'pending',
-            'data': data
-        }
-        self.jobs.append(job)
-        self.pending_jobs.put((job, target))        
-        return job
 
 job_runner = LocalJobRunner()
 service_queue = EventQueue(domain = 'trainer')
@@ -144,6 +81,11 @@ def train(params):
     
     # Write model
     joblib.dump(weekly_svr, os.path.join(MODEL_CACHE_PATH, model_file_name))
+
+    service_queue.publish_event({
+        'eventType': 'link_model_available',
+        'metadata': metadata
+    })
 
     return metadata
 

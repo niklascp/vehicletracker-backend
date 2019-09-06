@@ -25,7 +25,25 @@ class LocalTravelTimeHistory():
         self.link_travel_time['day'] = self.calendar.loc[self.link_travel_time.index.date, 'day'].values
         self.link_travel_time['day_type'] = self.calendar.loc[self.link_travel_time.index.date, 'day_type'].values
         self.link_travel_time['date'] = pd.DatetimeIndex(self.link_travel_time.index.date)
+
+    def link_travel_time_from_to(self, params):
+        link_ref = params['linkRef']
+        from_time = pd.to_datetime(params['fromTime'])
+        to_time = pd.to_datetime(params['toTime'])
+
+        _LOGGER.debug(f"getting 'link_travel_time' for link '{link_ref}' between '{from_time}' and '{to_time}'")
+
+        data = self.link_travel_time[from_time:to_time - pd.to_timedelta('1ns')][lambda x: x['link_ref'] == link_ref]
+        result = {
+            'time': np.diff(np.hstack((0, data.index.astype(np.int64) // 10**9))).tolist(),
+            'link_travel_time': data['link_travel_time'].values.tolist(),
+            #'day_type': data['day_type'].values.tolist()
+        }
         
+        _LOGGER.debug(f"returning {len(data)} results")
+
+        return result
+
     def link_travel_time_n_preceding_normal_days(self, params):
         link_ref = params['linkRef']
         time = pd.to_datetime(params['time'])
@@ -72,6 +90,7 @@ service_queue = EventQueue(domain = 'history')
 def start(): 
     client = LocalTravelTimeHistory()
 
+    service_queue.register_service('link_travel_time', client.link_travel_time_from_to)
     service_queue.register_service('link_travel_time_n_preceding_normal_days', client.link_travel_time_n_preceding_normal_days)
     service_queue.register_service('link_travel_time_special_days', client.link_travel_time_special_days)
     service_queue.start()
