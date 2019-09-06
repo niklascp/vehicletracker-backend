@@ -140,7 +140,7 @@ def train(params):
 
     # Write metadata
     with open(os.path.join(MODEL_CACHE_PATH, metadata_file_name), 'w') as f:
-        json.dump(f, metadata)
+        json.dump(metadata, f)
     
     # Write model
     joblib.dump(weekly_svr, os.path.join(MODEL_CACHE_PATH, model_file_name))
