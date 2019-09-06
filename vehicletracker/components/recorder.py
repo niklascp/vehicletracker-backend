@@ -2,12 +2,12 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
-from vehicletracker.azure.events import EventHubsQueue
+from vehicletracker.helpers.events import EventQueue
 from vehicletracker.data.client import PostgresClient
 
-event_queue = EventHubsQueue(consumer_group = 'recorder')
+event_queue = EventQueue(domain = 'recorder')
 
-_LOGGER = logging.getLogger('vehicletraker.recorder')
+_LOGGER = logging.getLogger(__name__)
 
 def main():
     if not os.path.exists('./logs'):

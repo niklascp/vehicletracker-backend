@@ -9,9 +9,10 @@ import uuid
 import pika
 import json
 
-from vehicletracker.consts import EVENTS_EXCHANGE_NAME
-
 from typing import Any, Callable
+
+#REQUESTS_EXCHANGE_NAME = 'vehicletracker-requests'
+EVENTS_EXCHANGE_NAME = 'vehicletracker-events'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ class EventQueue():
         self.thread = None
         self.cancel_event = None        
 
+        self.consume_connection = None
+        self.consume_channel = None
+
         self.connection = None
         self.channel = None
 
@@ -44,36 +48,36 @@ class EventQueue():
     def consume_internal(self):
         while not self.cancel_event.is_set():
             try:
-                _LOGGER.info('connecting to RabbitMQ ...')
+                _LOGGER.info('worker connecting to RabbitMQ ...')
 
                 # Declare connections and channel
-                self.connection = pika.BlockingConnection(self.parameters)
-                self.channel = self.connection.channel()
+                self.consume_connection = pika.BlockingConnection(self.parameters)
+                self.consume_channel = self.consume_connection.channel()
 
                 # Declare exchange / queue for service calls
                 # self.channel.exchange_declare(exchange = REQUESTS_EXCHANGE_NAME, exchange_type = 'topic')
                 # self.channel.queue_declare(queue = REQUESTS_QUEUE_NAME, auto_delete = True)
                         
                 # Declare exchange / queue for events
-                self.channel.exchange_declare(exchange = EVENTS_EXCHANGE_NAME, exchange_type = 'topic')
-                self.channel.queue_declare(queue = self.worker_queue_name, auto_delete = True)
+                self.consume_channel.exchange_declare(exchange = EVENTS_EXCHANGE_NAME, exchange_type = 'topic')
+                self.consume_channel.queue_declare(queue = self.worker_queue_name, auto_delete = True)
                 
                 # Declare queue for service callbacks        
-                self.channel.queue_declare(queue = self.callback_queue, exclusive = True)
+                self.consume_channel.queue_declare(queue = self.callback_queue, exclusive = True)
                 #result = self.channel.queue_declare(queue = '', exclusive = True)
                 #self.callback_queue = result.method.queue
         
                 # Hook up consumers
-                self.channel.basic_consume(queue = self.worker_queue_name, on_message_callback = self.event_callback, auto_ack = True)
-                self.channel.basic_consume(queue = self.callback_queue, on_message_callback = self.reply_callback, auto_ack = True)
+                self.consume_channel.basic_consume(queue = self.worker_queue_name, on_message_callback = self.event_callback, auto_ack = True)
+                self.consume_channel.basic_consume(queue = self.callback_queue, on_message_callback = self.reply_callback, auto_ack = True)
 
                 for event_type in self.listeners.keys():
-                    self.channel.queue_bind(
+                    self.consume_channel.queue_bind(
                         exchange = EVENTS_EXCHANGE_NAME,
                         queue = self.worker_queue_name,
                         routing_key = event_type)
 
-                self.channel.start_consuming()
+                self.consume_channel.start_consuming()
             
             except pika.exceptions.ConnectionClosedByBroker:
                 # Recovery from server-initiated connection closure, including
@@ -91,33 +95,52 @@ class EventQueue():
                 _LOGGER.exception("connection was closed, retrying...")
                 continue
 
-    def publish_event(self, event, reply_to = None, correlation_id = None):
-        while self.channel == None:
-            time.sleep(0.1)
+    def ensure_connection(self): 
+        _LOGGER.info('client connecting to RabbitMQ ...')
+        self.connection = pika.BlockingConnection(self.parameters)
+        self.channel = self.connection.channel()
 
-        self.channel.basic_publish(
+    def publish_internal_with_retry(self, exchange, routing_key, body, content_type, reply_to = None, correlation_id = None, retry_count = 3):
+        retry = 0
+        while retry < retry_count:
+            try:
+                self.ensure_connection()
+                self.channel.basic_publish(
+                    exchange = exchange,
+                    routing_key = routing_key,
+                    body = body,
+                    properties = pika.BasicProperties (
+                        content_type = content_type,
+                        reply_to = reply_to,
+                        correlation_id = correlation_id
+                    )
+                )
+                return
+            except Exception:
+                retry = retry + 1
+                _LOGGER.warn('failed to publish_event (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id}, retry {retry})')
+
+        _LOGGER.error('all attempts failed to publish_event (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id})')
+
+    def publish_event(self, event, reply_to = None, correlation_id = None):
+        self.publish_internal_with_retry(
             exchange = EVENTS_EXCHANGE_NAME,
             routing_key = event['eventType'],
             body = json.dumps(event),
-            properties = pika.BasicProperties (
-                content_type = 'application/json',
-                reply_to = reply_to,
-                correlation_id = correlation_id
-            )
+            content_type = 'application/json',
+            reply_to = reply_to,
+            correlation_id = correlation_id
         )
 
-    def publish_reply(self, data, to = None, correlation_id = None):
-        while self.channel == None:
-            time.sleep(0.1)
-            
-        self.channel.basic_publish(
+    def publish_reply(self, data, to, correlation_id, content_type = None):
+        if content_type is None:
+            content_type = 'application/json'
+        self.publish_internal_with_retry(
             exchange = '',
             routing_key = to,
-            body = json.dumps(data),
-            properties = pika.BasicProperties (
-                content_type = 'application/json',
-                correlation_id = correlation_id
-            )
+            body = json.dumps(data) if content_type is content_type == 'application/json' else data,
+            content_type = content_type,
+            correlation_id = correlation_id
         )
 
     def event_callback(self, ch, method, properties, body):
@@ -134,11 +157,17 @@ class EventQueue():
                     # TODO: Wrap targets in exception logging and execute async.
                     try:
                         #task_runner.async_add_job(target, *args)
-                        result_data = target(event)
+                        result = target(event)
+
+                        if isinstance(result, tuple):
+                            result_data, content_type = result
+                        else:
+                            result_data, content_type = result, None
 
                         if properties.reply_to:
                             self.publish_reply(
                                 data = result_data,
+                                content_type = content_type,
                                 to = properties.reply_to,
                                 correlation_id = properties.correlation_id)
 
@@ -164,18 +193,15 @@ class EventQueue():
     
     def reply_callback(self, ch, method, properties, body):
         try:
-            if properties.content_type == 'application/json':
-                data = json.loads(body)
-                #event_type = event['eventType']
-                correlation_id = properties.correlation_id
+            correlation_id = properties.correlation_id
 
-                _LOGGER.debug(f"handling reply (correlation_id: {correlation_id})")	
+            _LOGGER.debug(f"handling reply (correlation_id: {correlation_id})")	
 
-                if correlation_id:	
-                    wait_event = self.wait_events.pop(correlation_id, None)
-                    if wait_event:
-                        self.results[correlation_id] = data
-                        wait_event.set()
+            if correlation_id:	
+                wait_event = self.wait_events.pop(correlation_id, None)
+                if wait_event:
+                    self.results[correlation_id] = (body, properties.content_type)
+                    wait_event.set()
 
         except Exception:
             _LOGGER.exception('Error in reply_callback.')
@@ -184,8 +210,8 @@ class EventQueue():
         _LOGGER.info(f"listening for {event_type}.")
         if event_type not in self.listeners:
             self.listeners[event_type] = []
-            if self.channel:
-                self.channel.queue_bind(
+            if self.consume_channel:
+                self.consume_channel.queue_bind(
                     exchange = EVENTS_EXCHANGE_NAME,
                     queue = self.worker_queue_name,
                     routing_key = event_type)
@@ -196,8 +222,9 @@ class EventQueue():
         #self.listeners[f'service.{name}'] = []
         self.listen(f'service.{service_name}', lambda x: target(x.get('serviceData')))
 
-    def call_service(self, service_name, service_data, timeout = 1000):
+    def call_service(self, service_name, service_data, timeout = 300, parse_json = True):
         correlation_id = str(uuid.uuid4())
+        _LOGGER.debug(f"call service '{service_name}' (correlation_id: {correlation_id}, timeout: {timeout}).")
         self.wait_events[correlation_id] = threading.Event()
         self.publish_event(
             event = {
@@ -209,11 +236,16 @@ class EventQueue():
         )
         try:
             if self.wait_events[correlation_id].wait(timeout = timeout):
-                return self.results.pop(correlation_id)
+                body, content_type = self.results.pop(correlation_id)
+                if content_type == 'application/json' and parse_json:
+                    return json.loads(body)
+                else:
+                    return body, content_type
             else:
-                _LOGGER.info(f"call to {service_name} timed out.")
+                _LOGGER.warn(f"call to '{service_name}' timed out.")
         except:
-            raise
+            _LOGGER.exception(f"call service '{service_name}' failed.")
+            return None
         finally:
             self.wait_events.pop(correlation_id, None)
 
@@ -233,6 +265,13 @@ class EventQueue():
         
         if self.cancel_event:
             self.cancel_event.set()
+
+        if self.consume_connection:
+            try:
+                self.consume_channel.stop_consuming()
+                self.consume_connection.close()
+            except pika.exceptions.AMQPConnectionError:
+                pass
 
         if self.connection:
             try:

@@ -30,16 +30,16 @@ logging:
       when: midnight
       encoding: 'utf-8'
   loggers:
-    vehicletracker:
+    root:
       level: 'DEBUG'
-    vehicletracker.trainer:
+    vehicletracker.components.history_local:
       level: 'DEBUG'
-    vehicletracker.azure:
+    vehicletracker.components.trainer:
       level: 'DEBUG'
-    vehicletracker.azure.events:
-      level: 'INFO'
-    vehicletracker.azure.services:
-      level: 'INFO'
+    vehicletracker.components.predictor:
+      level: 'DEBUG'
+    vehicletracker.helpers.events:
+      level: 'DEBUG'
   root:
     level: 'INFO'
     handlers:

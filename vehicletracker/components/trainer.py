@@ -6,8 +6,7 @@ import logging.config
 import threading
 import queue
 
-from vehicletracker.data.client import PostgresClient
-from vehicletracker.data.events import EventQueue
+from vehicletracker.helpers.events import EventQueue
 
 from datetime import datetime
 
@@ -16,11 +15,7 @@ import yaml
 import json
 import pandas as pd
 
-_LOGGER = logging.getLogger('vehicletracker.trainer')
-
-stop_event = threading.Event()
-service_queue = EventQueue(domain = 'trainer')
-state_store = PostgresClient()  
+_LOGGER = logging.getLogger(__name__)
 
 # TODO: This will only work with a single trainer
 class LocalJobRunner(object):
@@ -29,13 +24,16 @@ class LocalJobRunner(object):
         self.job_id = 0      
         self.jobs = [] 
         self.pending_jobs = queue.Queue()
+        self.stop_event = threading.Event()
         self.threads = []
 
     def worker(self):
-        while True:
-            item = self.pending_jobs.get()
-            if item is None:
-                break
+        while not self.stop_event.is_set():
+            try:
+                item = self.pending_jobs.get(block=True, timeout=1)
+            except queue.Empty:
+                continue
+
             job, target = item
             job_id = job['jobId']
             _LOGGER.info(f"Starting background job '{job_id}'.")
@@ -58,10 +56,13 @@ class LocalJobRunner(object):
         assert(len(self.threads) == 0)     
         for i in range(1):
             t = threading.Thread(target=self.worker)
+            t.deamon = True
             t.start()
             self.threads.append(t)
 
     def stop(self):
+        _LOGGER.info(f"local job runner is stopping")
+        self.stop_event.set()
         for t in self.threads:
             t.join(1)
         self.threads = []
@@ -78,12 +79,7 @@ class LocalJobRunner(object):
         return job
 
 job_runner = LocalJobRunner()
-
-def load_config():
-    config_file = "configuration.yaml"
-    with open(config_file, "r") as fd:
-        config = yaml.load(fd.read())
-    return config
+service_queue = EventQueue(domain = 'trainer')
 
 def list_trainer_jobs(data):
     return job_runner.jobs
@@ -103,15 +99,18 @@ def train(data):
     model_parameters = data.get('parameters', {})
     _LOGGER.debug(f"Train link model for '{link_ref}' using model '{model_name}'.")   
 
-    from vehicletracker.data.client import PostgresClient
     from vehicletracker.models import WeeklySvr
 
     import joblib
 
-    data = PostgresClient()
-
     n = model_parameters.get('n', 21)
-    train = data.link_travel_time_n_preceding_normal_days(link_ref, time, n)
+    train = pd.DataFrame(service_queue.call_service('link_travel_time_n_preceding_normal_days', {
+        'linkRef': link_ref,
+        'time': time.isoformat(),
+        'n': n
+    }, timeout = 5))
+    train.index = pd.to_datetime(train['time'].cumsum(), unit='s')
+    train.drop(columns = 'time', inplace=True)
     _LOGGER.debug(f"Loaded train data: {train.shape[0]}")
 
     weekly_svr = WeeklySvr()
@@ -138,23 +137,12 @@ def train(data):
 
     return metadata
 
-def main():
-    if not os.path.exists('./logs'):
-        os.makedirs('./logs')
-    
-    config = load_config()
-    logging.config.dictConfig(config['logging'])
-
-    service_queue.register_service('schedule_train_link_model', schedule_train_link_model)
+def start(): 
+    service_queue.register_service('link_model_schedule_train', schedule_train_link_model)
     service_queue.register_service('list_trainer_jobs', list_trainer_jobs)
     service_queue.start()
     job_runner.start()
-
-    input("Press Enter to exit...")
-    os._exit(0)
     
+def stop():
+    service_queue.stop()
     job_runner.stop()
-    service_queue.stop()    
-
-if __name__ == '__main__':
-    main()
