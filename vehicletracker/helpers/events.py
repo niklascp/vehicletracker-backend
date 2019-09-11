@@ -167,7 +167,7 @@ class EventQueue():
                         else:
                             result_data, content_type = result, None
 
-                        if properties.reply_to:
+                        if result_data and properties.reply_to:
                             self.publish_reply(
                                 data = result_data,
                                 content_type = content_type,
