@@ -48,6 +48,7 @@ logging:
     vehicletracker.helpers.job_runner:
       level: 'INFO'
     recorder:
+      propagate: False
       handlers:
       - 'recorder'
   root:
