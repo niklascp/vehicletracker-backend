@@ -44,7 +44,9 @@ logging:
     vehicletracker.components.recorder:
       level: 'DEBUG'
     vehicletracker.helpers.events:
-      level: 'DEBUG'
+      level: 'INFO'
+    vehicletracker.helpers.job_runner:
+      level: 'INFO'
     recorder:
       handlers:
       - 'recorder'
