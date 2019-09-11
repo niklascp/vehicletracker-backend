@@ -75,7 +75,7 @@ class EventQueue():
                     self.consume_channel.queue_bind(
                         exchange = EVENTS_EXCHANGE_NAME,
                         queue = self.worker_queue_name,
-                        routing_key = event_type)
+                        routing_key = '#' if event_type == '*' else event_type)
 
                 self.consume_channel.start_consuming()
             
@@ -152,6 +152,7 @@ class EventQueue():
                 event_type = event['eventType']
 
                 target_list = self.listeners.get(event_type, [])
+                target_list.extend(self.listeners.get('*', []))
 
                 _LOGGER.debug(f"handling {event_type} with {len(target_list)} targets (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id})")
 
@@ -216,7 +217,7 @@ class EventQueue():
                 self.consume_channel.queue_bind(
                     exchange = EVENTS_EXCHANGE_NAME,
                     queue = self.worker_queue_name,
-                    routing_key = event_type)
+                    routing_key = '#' if event_type == '*' else event_type)
 
         self.listeners[event_type].append(target)
     

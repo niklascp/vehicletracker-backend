@@ -2,9 +2,8 @@ logging:
   version: 1
   disable_existing_loggers: true
   formatters:
-    brief:
-      format: '%(levelname)-8s; %(name)-35s; %(message)s'
-      datefmt: "%I:%M:%S"
+    recorder:
+      format: '%(asctime)s;%(message)s'
     standard:
       format: '%(asctime)s; %(levelname)-8s; %(name)-35s; %(funcName)-20s;%(lineno)4d: %(message)s'
       datefmt: "%I:%M:%S"
@@ -29,17 +28,26 @@ logging:
       filename: './logs/log.log'
       when: midnight
       encoding: 'utf-8'
+    recorder:
+      level: 'INFO'
+      class: 'logging.FileHandler'
+      formatter: 'recorder'
+      filename: './logs/recorder_events.log'
+      encoding: 'utf-8'
   loggers:
-    root:
-      level: 'DEBUG'
     vehicletracker.components.history_local:
       level: 'DEBUG'
     vehicletracker.components.trainer:
       level: 'DEBUG'
     vehicletracker.components.predictor:
       level: 'DEBUG'
+    vehicletracker.components.recorder:
+      level: 'DEBUG'
     vehicletracker.helpers.events:
       level: 'DEBUG'
+    recorder:
+      handlers:
+      - 'recorder'
   root:
     level: 'INFO'
     handlers:

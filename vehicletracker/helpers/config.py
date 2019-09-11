@@ -1,5 +1,7 @@
 import yaml
 
+ARG_PREFIX = '-config:'
+
 def load_config(args = []):
     config_file = "configuration.yaml"
     
@@ -8,7 +10,10 @@ def load_config(args = []):
 
     # overrides
     for arg in args:
-        [key, value] = arg.split('=', 2)
+        if not arg.startswith(ARG_PREFIX):
+            continue
+
+        key, value = arg[len(ARG_PREFIX):].split('=', 2)
         config_level = config
         key_parts = key.split('.')
         # traverse into level
