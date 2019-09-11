@@ -119,10 +119,10 @@ class EventQueue():
                 return
             except Exception:
                 retry = retry + 1
-                _LOGGER.warn('failed to publish_event (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id}, retry {retry})')
+                _LOGGER.warn(f"failed to publish_event (reply_to: {reply_to}, correlation_id: {correlation_id}, retry {retry})")
                 self.connection = None
 
-        _LOGGER.error('all attempts failed to publish_event (reply_to: {properties.reply_to}, correlation_id: {properties.correlation_id})')
+        _LOGGER.error(f"all attempts failed to publish_event (reply_to: {reply_to}, correlation_id: {correlation_id})")
 
     def publish_event(self, event, reply_to = None, correlation_id = None):
         self.publish_internal_with_retry(
