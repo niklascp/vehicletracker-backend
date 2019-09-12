@@ -15,6 +15,7 @@ import json
 import pandas as pd
 
 _LOGGER = logging.getLogger(__name__)
+MODEL_CACHE_PATH = './cache/lt-link-travel-time/'
 
 job_runner = LocalJobRunner()
 service_queue = EventQueue(domain = 'trainer')
@@ -35,10 +36,21 @@ def train(params):
     time = pd.to_datetime(params.get('time') or pd.datetime.now())
     model_name = params['model']
     model_parameters = params.get('parameters', {})
-    _LOGGER.debug(f"Train link model for '{link_ref}' using model '{model_name}'.")   
+
+    model_hash = hashlib.sha256(json.dumps(
+        'linkRef': link_ref,
+        'modelName': model_name,
+        'time': time.isoformat(),
+        'model_parameters': model_parameters
+        }, sort_keys=True).encode('utf-8')).digest()
+    model_hash_hex = ''.join('{:02x}'.format(x) for x in model_hash)
+
+    _LOGGER.debug(f"Train link model for '{link_ref}' using model '{model_name}' (hash: {model_hash_hex}).")
 
     from vehicletracker.models import WeeklySvr
+    from vehicletracker.models import WeeklyHistoricalAverage
 
+    import hashlib
     import joblib
 
     n = model_parameters.get('n', 21)
@@ -59,29 +71,33 @@ def train(params):
     train.drop(columns = 'time', inplace=True)
     _LOGGER.debug(f"Loaded train data: {train.shape[0]}")
 
-    weekly_svr = WeeklySvr()
-    weekly_svr.fit(train.index, train.values)
+    metadata_file_name = f'{model_hash_hex}.json'
+    model_file_name = f'{model_hash_hex}.joblib'
 
-    link_ref_safe = link_ref.replace(':', '-')
-    MODEL_CACHE_PATH = './cache/lt-link-travel-time/'
-
-    metadata_file_name = f'{model_name}-{time:%Y%m%d}-{n}-{link_ref_safe}.json'
-    model_file_name = f'{model_name}-{time:%Y%m%d}-{n}-{link_ref_safe}.joblib'
+    if model_name == 'svr':
+        weekly_svr = WeeklySvr()
+        weekly_svr.fit(train.index, train.values)
+        # Write model
+        joblib.dump(weekly_svr, os.path.join(MODEL_CACHE_PATH, model_file_name))
+    elif model_name == 'ha':
+        weekly_ha = WeeklyHistoricalAverage()
+        weekly_ha.fit(train.index, train.values)
+        # Write model
+        joblib.dump(weekly_ha, os.path.join(MODEL_CACHE_PATH, model_file_name))
 
     metadata = {
+        'hash': model_hash_hex,
         'model': model_name,
         'linkRef': link_ref,
         'time': time.isoformat(),
-        'trained': datetime.now().isoformat()
+        'trained': datetime.now().isoformat(),
+        'resourceUrl': os.path.join(MODEL_CACHE_PATH, model_file_name)
     }
 
     # Write metadata
     with open(os.path.join(MODEL_CACHE_PATH, metadata_file_name), 'w') as f:
         json.dump(metadata, f)
     
-    # Write model
-    joblib.dump(weekly_svr, os.path.join(MODEL_CACHE_PATH, model_file_name))
-
     service_queue.publish_event({
         'eventType': 'link_model_available',
         'metadata': metadata

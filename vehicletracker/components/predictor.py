@@ -23,6 +23,8 @@ class LocalModelStore():
 
     def __init__(self, path):
         self.path = path
+
+    def load_metadata():
         self.models = []
 
         if not os.path.exists(path):
@@ -75,14 +77,20 @@ def predict(event):
 def list_link_models(service_data):
     return link_model_store.list_models()
 
+def link_model_available(event):
+    #link_model_store.refresh(event[''])
+    pass
+
 def start(): 
     # TODO: Move into class DiskModelCache
 
-    _LOGGER.info('Loading cached models from disk ...')
+    _LOGGER.info('Loading cached models from persistent store ...')
+    link_model_store.load_metadata()
 
     # new
     event_queue.register_service('link_predict', predict)
     event_queue.register_service('link_models', list_link_models)
+    event_queue.listen('link_model_available', link_model_available) #TODO: listen_all
     
     event_queue.start()
 

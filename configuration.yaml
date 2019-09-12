@@ -34,6 +34,7 @@ logging:
       formatter: 'recorder'
       filename: './logs/recorder_events.log'
       encoding: 'utf-8'
+      mode: 'w'
   loggers:
     vehicletracker.components.history_local:
       level: 'DEBUG'
