@@ -38,7 +38,7 @@ class LocalModelStore():
         self.models[model_metadata['hash']] = model_metadata
 
     def list_models(self):
-        return self.models.values()
+        return list(self.models.values())
 
     def load_model(self, model_hash):
         pass
