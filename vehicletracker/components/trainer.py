@@ -28,16 +28,16 @@ def schedule_train_link_model(data):
     model_name = data['model']
     _LOGGER.debug(f"Scheduling 'link model train' for link '{link_ref}' using model '{model_name}'.")
     return { 'jobId': job_runner.add_job(train, data)['jobId'] }
-    
+
 def train(params):
-    import pandas as pd    
-    
-    link_ref = params['linkRef']    
+    import pandas as pd
+
+    link_ref = params['linkRef']
     time = pd.to_datetime(params.get('time') or pd.datetime.now())
     model_name = params['model']
     model_parameters = params.get('parameters', {})
 
-    model_hash = hashlib.sha256(json.dumps(
+    model_hash = hashlib.sha256(json.dumps({
         'linkRef': link_ref,
         'modelName': model_name,
         'time': time.isoformat(),

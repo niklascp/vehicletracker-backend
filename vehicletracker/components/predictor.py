@@ -24,21 +24,21 @@ class LocalModelStore():
     def __init__(self, path):
         self.path = path
 
-    def load_metadata():
+    def load_metadata(self):
         self.models = []
 
-        if not os.path.exists(path):
-            os.makedirs(path)
+        if not os.path.exists(self.path):
+            os.makedirs(self.path)
 
-        for file_name in os.listdir(path):
+        for file_name in os.listdir(self.path):
             if not file_name.endswith(".json"):
                 continue
-            
-            metadata_file_path = os.path.join(path, file_name)
-            
+
+            metadata_file_path = os.path.join(self.path, file_name)
+
             with open(metadata_file_path, 'r') as f:
                 model_metadata = json.load(f)
-            
+
             self.models.append(model_metadata)
 
     def list_models(self):
