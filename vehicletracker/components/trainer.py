@@ -37,6 +37,8 @@ def train(params):
     model_name = params['model']
     model_parameters = params.get('parameters', {})
 
+    import hashlib
+
     model_hash = hashlib.sha256(json.dumps({
         'linkRef': link_ref,
         'modelName': model_name,
@@ -50,7 +52,6 @@ def train(params):
     from vehicletracker.models import WeeklySvr
     from vehicletracker.models import WeeklyHistoricalAverage
 
-    import hashlib
     import joblib
 
     n = model_parameters.get('n', 21)
