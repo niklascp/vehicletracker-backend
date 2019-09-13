@@ -29,13 +29,15 @@ class LocalModelStore():
 
         model_hash_hex = model_metadata['hash']
         model_hash_simple_len = 6
+        model_ref = model_hash_hex[:model_hash_simple_len]
 
-        while model_hash_hex[:model_hash_simple_len] in self.models:
+        while model_ref in self.models and self.models[model_ref]['hash'] != model_hash_hex:
             model_hash_simple_len += 1
+            model_ref = model_hash_hex[:model_hash_simple_len]
 
-        model_metadata['hash'] = model_hash_hex[:model_hash_simple_len]
+        model_metadata['ref'] = model_ref
 
-        self.models[model_metadata['hash']] = model_metadata
+        self.models[model_ref] = model_metadata
 
     def list_models(self):
         return list(self.models.values())
