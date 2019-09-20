@@ -1,15 +1,19 @@
-import sys
-import os
+"""Vehicle Tracker Predictor Component"""
+
 import logging
-
-from vehicletracker.helpers.events import EventQueue
-from vehicletracker.helpers.model_store import LocalModelStore
-
 from datetime import datetime
 
-import json
+from typing import (
+    Dict,
+    Any
+)
 
 import pandas as pd
+
+from vehicletracker.core import VehicleTrackerNode, callback
+from vehicletracker.helpers.model_store import LocalModelStore
+
+DOMAIN = 'predictor'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,41 +21,52 @@ LINK_MODEL_PATH = './cache/lt-link-travel-time/'
 
 LINK_MODELS = {}
 
-event_queue = EventQueue(domain = 'predictor')
+async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):    
+    """Sets up the predictor component"""
 
-link_model_store = LocalModelStore(LINK_MODEL_PATH)
-
-def predict(event):
-    link_ref = event['linkRef']
-    time = datetime.fromisoformat(event.get('time')) if event.get('time') else datetime.now()
-    model_name = event['model']
-    model = LINK_MODELS[link_ref]['model']
-
-    _LOGGER.debug(f"Recived link predict request for link '{link_ref}' using model '{model_name}' at time {time}.")
-
-    ix = pd.DatetimeIndex([time])
-    pred = model.predict(ix)
-
-    return pred[0, 0]
-
-def list_link_models(service_data):
-    return link_model_store.list_models()
-
-def link_model_available(event):
-    link_model_store.add_model(event['metadata'])
-
-def start(): 
-    # TODO: Move into class DiskModelCache
-
-    _LOGGER.info('Loading cached models from persistent store ...')
-    link_model_store.load_metadata()
-
-    # new
-    event_queue.register_service('link_predict', predict)
-    event_queue.register_service('link_models', list_link_models)
-    event_queue.listen('link_model_available', link_model_available) #TODO: listen_all
+    predictor = node.data[DOMAIN] = Predictor(node, config[DOMAIN])
     
-    event_queue.start()
+    node.async_add_job(predictor.restore_state)
 
-def stop():
-    event_queue.stop()
+    # Wire up events and services
+    await node.services.async_register(DOMAIN, 'link_predict', predictor.predict)
+    await node.services.async_register(DOMAIN, 'link_models', predictor.list_link_models)
+    await node.events.async_listen('link_model_available', predictor.link_model_available)
+
+    return True
+
+class Predictor():
+    """Predictor State"""
+
+    def __init__(self, node, config):
+        self.link_model_store = LocalModelStore(LINK_MODEL_PATH)
+
+    def restore_state(self):
+        """Restore models from persistent model store"""
+        _LOGGER.info('Loading cached models from persistent store ...')
+        self.link_model_store.load_metadata()
+
+    def predict(self, event):
+        """Service handler for 'link_predict'. Predicts a single link at a single point in time."""
+
+        link_ref = event['linkRef']
+        time = datetime.fromisoformat(event.get('time')) if event.get('time') else datetime.now()
+        model_name = event['model']
+        model = self.link_model_store.get_model(link_ref, model_name)
+
+        _LOGGER.debug("Recived link predict request for link '%s' using model '%s' at time %s.",
+            link_ref, model_name, time)
+
+        index = pd.DatetimeIndex([time])
+        pred = model.predict(index)
+
+        return pred[0, 0]
+
+    def list_link_models(self, service_data):
+        """Service handler for 'list_link_models'. List available link models."""
+        return self.link_model_store.list_models()
+
+    @callback
+    def link_model_available(self, event):
+        """Event callback for 'link_model_available'"""
+        self.link_model_store.add_model(event['metadata'])
