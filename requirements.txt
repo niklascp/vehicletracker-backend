@@ -1,5 +1,6 @@
 aiohttp
 argparse
+colorlog
 uvloop
 numpy
 pandas
