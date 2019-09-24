@@ -278,7 +278,9 @@ class EventBus:
     async def async_connect(self):
         """Initialize connection to  new event bus."""
         _LOGGER.info("Connecting to RabbitMQ ...")
-        self._connection = await aio_pika.connect_robust("amqp://guest:guest@127.0.0.1/", loop = self._node.loop)
+        self._connection = await aio_pika.connect_robust(
+            os.getenv('RABBITMQ_URL', 'amqp://guest:guest@127.0.0.1/'),
+            loop = self._node.loop)
         # Creating channel
         self._channel = await self._connection.channel()    # type: aio_pika.Channel
         self._event_exchange = await self._channel.declare_exchange(EVENTS_EXCHANGE_NAME, ExchangeType.TOPIC)

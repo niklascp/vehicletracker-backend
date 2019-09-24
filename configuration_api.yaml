@@ -2,3 +2,4 @@ node:
   name: 'api' 
   
 http:
+  server_port: 80
