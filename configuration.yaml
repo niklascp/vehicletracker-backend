@@ -1,4 +1,7 @@
-http:
+node:
+  name: 'dev' 
+  
+http:  
 
 predictor:
 
