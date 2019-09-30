@@ -2,7 +2,10 @@ node:
   name: 'dev' 
   
 http:  
-
+  enable_cors: True
+  
 predictor:
+
+trainer:
 
 history_local:

@@ -3,3 +3,4 @@ node:
   
 http:
   server_port: 8000
+  enable_cors: True

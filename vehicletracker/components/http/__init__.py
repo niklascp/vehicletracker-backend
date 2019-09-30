@@ -9,6 +9,7 @@ import asyncio
 import async_timeout
 from aiohttp import web
 from aiohttp.web_exceptions import HTTPMovedPermanently
+import aiohttp_cors
 
 DOMAIN = "http"
 
@@ -47,8 +48,8 @@ async def async_setup(node, config):
     async def service(request):
         service = request.match_info['service']
         service_data = {}
-        for k, v in request.rel_url.query.items():
-            service_data[k] = v
+        for key, value in request.rel_url.query.items():
+            service_data[key] = value
         result = await node.services.async_call(
             service, service_data
         )
@@ -97,6 +98,20 @@ async def async_setup(node, config):
         return response
 
     server.app.router.add_route('get', '/api/event-stream', event_stream)
+
+    if 'enable_cors' in conf and conf['enable_cors']:
+        # Configure default CORS settings.
+        cors = aiohttp_cors.setup(server.app, defaults={
+            "*": aiohttp_cors.ResourceOptions(
+                    allow_credentials=True,
+                    expose_headers="*",
+                    allow_headers="*",
+                )
+        })
+
+        # Configure CORS on all routes.
+        for route in list(server.app.router.routes()):
+            cors.add(route)
 
     await server.start()
 
