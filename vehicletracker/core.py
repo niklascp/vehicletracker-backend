@@ -398,7 +398,13 @@ class EventBus:
 
         return remove_listener
 
-    async def async_publish(self, event):
+    def publish(self, event : Dict[str, Any]) -> None:
+        """Publish an event."""
+        return asyncio.run_coroutine_threadsafe(
+            self.async_publish(event), 
+            loop = self._node.loop).result()
+
+    async def async_publish(self, event : Dict[str, Any]):
         """Publish an event."""
         await self._event_exchange.publish(
             aio_pika.Message(

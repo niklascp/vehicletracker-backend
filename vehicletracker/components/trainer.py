@@ -68,7 +68,7 @@ class Trainer():
                 job_state['result'] = self.train(job_state['input'])
                 job_state['status'] = 'completed'
                 job_state['stopped'] = datetime.now().isoformat()
-            except Exception as e: # pylint-disable=broad-except
+            except Exception as e: # pylint: disable=broad-except
                 job_state['status'] = 'failed'
                 job_state['stopped'] = datetime.now().isoformat()
                 job_state['error'] = str(e)
@@ -126,7 +126,7 @@ class Trainer():
         model_file_name = f'{model_hash_hex}.joblib'
 
         if model_name == 'svr':
-            weekly_svr = WeeklySvr()
+            weekly_svr = WeeklySvr(verbose = False)
             weekly_svr.fit(train.index, train.values)
             # Write model
             joblib.dump(weekly_svr, os.path.join(MODEL_CACHE_PATH, model_file_name))
@@ -149,7 +149,7 @@ class Trainer():
         with open(os.path.join(MODEL_CACHE_PATH, metadata_file_name), 'w') as f:
             json.dump(metadata, f)
         
-        self.node.events.publish_event({
+        self.node.events.publish({
             'eventType': 'link_model_available',
             'metadata': metadata
         })

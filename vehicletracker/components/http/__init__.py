@@ -56,6 +56,7 @@ async def async_setup(node, config):
         return web.json_response(result)
 
     server.app.router.add_route('get', '/api/services/{service}', service)
+    server.app.router.add_route('post', '/api/services/{service}', service)
 
     async def event_stream(request):
         buffer = asyncio.Queue() 
