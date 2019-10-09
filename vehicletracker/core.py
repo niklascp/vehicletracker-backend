@@ -410,6 +410,7 @@ class EventBus:
 
     async def async_publish(self, event : Dict[str, Any]):
         """Publish an event."""
+        await self._future
         await self._event_exchange.publish(
             aio_pika.Message(
                 bytes(json.dumps(event), 'utf-8'),
@@ -423,6 +424,7 @@ class EventBus:
 
     async def async_reply(self, event, to_node):
         """Publish a reply."""
+        await self._future
         await self._channel.default_exchange.publish(
             aio_pika.Message(
                 bytes(json.dumps(event), 'utf-8'),
