@@ -1,15 +1,21 @@
+"""Persistant model store"""
+
 import os
-import joblib
 import json
+from datetime import datetime
+
+import joblib
+from typing import (Dict, List)
 
 class LocalModelStore():
     
     def __init__(self, path):
         self.path = path
+        self.models : Dict[str, ] = {}
+        self.spatial_map : Dict[str, List[str]] = {}
 
     def load_metadata(self):
-        self.models = {}
-
+        """Loads metadata from disk."""    
         if not os.path.exists(self.path):
             os.makedirs(self.path)
 
@@ -35,12 +41,41 @@ class LocalModelStore():
             model_hash_simple_len += 1
             model_ref = model_hash_hex[:model_hash_simple_len]
 
-        model_metadata['ref'] = model_ref
+        model_metadata['ref'] = model_ref        
+        exists = model_ref in self.models
 
         self.models[model_ref] = model_metadata
 
-    def list_models(self):
-        return list(self.models.values())
+        if not model_metadata['linkRef'] in self.spatial_map:
+            self.spatial_map[model_metadata['linkRef']] = []
+        if not exists:
+            self.spatial_map[model_metadata['linkRef']].append(model_ref)
+
+
+    def list_models(self, model_name, spatial_ref, temporal_ref):
+        """List relevent models for a given spatial and temporal reference"""
+        if spatial_ref:
+            candidates = [self.models[ref] for ref in self.spatial_map[spatial_ref]]
+        else:
+            candidates = self.models.values()
+            
+        if model_name:
+            candidates = filter(lambda x: x['model'] == model_name, candidates)
+
+        if temporal_ref:
+            iso_time = temporal_ref.isoformat()
+            latest = {}
+            for c in candidates:
+                key = c['model'] + ':' + c['linkRef']
+                if key in latest:
+                    if latest[key]['time'] < c['time'] and c['time'] <= iso_time:
+                        latest[key] = c
+                else:
+                    latest[key] = c
+
+            candidates = latest.values()
+
+        return list(candidates)
 
     def load_model(self, model_hash):
         pass

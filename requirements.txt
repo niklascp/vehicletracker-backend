@@ -2,7 +2,6 @@ aiohttp
 aiohttp_cors
 argparse
 colorlog
-uvloop
 numpy
 pandas
 geopandas

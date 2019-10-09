@@ -62,7 +62,8 @@ async def async_setup(node, config):
         buffer = asyncio.Queue() 
 
         async def forward_events(event):
-            await buffer.put(event)
+            if event['eventType'] != 'reply':
+                await buffer.put(event)
 
         response = web.StreamResponse()
         response.content_type = "text/event-stream"

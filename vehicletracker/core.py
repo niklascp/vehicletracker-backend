@@ -24,6 +24,8 @@ from typing import (
 import aio_pika
 from aio_pika.exchange import ExchangeType
 
+from vehicletracker.const import (ATTR_EVENT_TYPE, ATTR_NODE_NAME, EVENT_NODE_START, EVENT_NODE_STOP)
+
 T = TypeVar("T")
 CALLABLE_T = TypeVar("CALLABLE_T", bound=Callable)
 CALLBACK_TYPE = Callable[[], None]
@@ -125,8 +127,10 @@ class VehicleTrackerNode:
         self.state = NodeState.starting
 
         setattr(self.loop, "_thread_ident", threading.get_ident())
-        #self.bus.async_fire(EVENT_HOMEASSISTANT_START)
-
+        await self.events.async_publish({
+            ATTR_EVENT_TYPE: EVENT_NODE_START,
+            ATTR_NODE_NAME: self.name
+        })
 
         await self.async_block_till_done()
         #try:
@@ -173,17 +177,19 @@ class VehicleTrackerNode:
         # stage 1
         self.state = NodeState.stopping
         #self.async_track_tasks()
-        #self.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+        await self.events.async_publish({
+            ATTR_EVENT_TYPE: EVENT_NODE_STOP,
+            ATTR_NODE_NAME: self.name
+        })
         await self.async_block_till_done()
 
         # stage 2
         self.state = NodeState.not_running
-        #self.bus.async_fire(EVENT_HOMEASSISTANT_CLOSE)
         await self.async_block_till_done()
         self.executor.shutdown()
 
         self.exit_code = exit_code
-        print("Here 2")
+
         if self._stopped is not None:
             self._stopped.set()
         else:
@@ -263,7 +269,6 @@ class VehicleTrackerNode:
 
 EVENTS_EXCHANGE_NAME = 'vehicletracker-events'
 
-
 class EventBus:
     """Allow publication of and listening for events over RabbitMQ."""
 
@@ -296,7 +301,6 @@ class EventBus:
                 async with message.process():
                     event_type = message.headers['event_type']
                     domain_listeners = self._listeners.get(domain, {})
-                    print(event_type, domain, len(domain_listeners))
                     event = json.loads(message.body)
                     for target in domain_listeners.get(event_type, []):
                         self._node.async_add_job(target, event)

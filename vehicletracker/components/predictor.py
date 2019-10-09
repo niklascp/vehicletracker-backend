@@ -52,7 +52,7 @@ class Predictor():
         link_ref = event['linkRef']
         time = datetime.fromisoformat(event.get('time')) if event.get('time') else datetime.now()
         model_name = event['model']
-        model = self.link_model_store.get_model(link_ref, model_name)
+        model_candidates = self.link_model_store.list_models(model_name, link_ref, time)
 
         _LOGGER.debug("Recived link predict request for link '%s' using model '%s' at time %s.",
             link_ref, model_name, time)
@@ -62,9 +62,13 @@ class Predictor():
 
         return pred[0, 0]
 
-    def list_link_models(self, service_data):
+    def list_link_models(self, service_data):        
         """Service handler for 'list_link_models'. List available link models."""
-        return self.link_model_store.list_models()
+
+        model_name = service_data.get('model')
+        link_ref = service_data.get('linkRef')
+        time = datetime.fromisoformat(service_data.get('time')) if service_data.get('time') else None
+        return self.link_model_store.list_models(model_name, link_ref, time)
 
     @callback
     def link_model_available(self, event):

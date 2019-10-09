@@ -1,13 +1,13 @@
 """Start Vehicle Tracker."""
 
+import sys
+import os
+import subprocess
+
+from typing import List, Dict, Any, TYPE_CHECKING
+
 import argparse
 import asyncio
-import os
-import platform
-import subprocess
-import sys
-import threading
-from typing import List, Dict, Any, TYPE_CHECKING
 
 from vehicletracker.const import __version__, RESTART_EXIT_CODE
 from vehicletracker.helpers.config import load_config
