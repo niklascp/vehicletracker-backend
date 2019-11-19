@@ -4,9 +4,6 @@ import logging
 from datetime import datetime
 from typing import (Any, Dict)
 
-import numpy as np
-import pandas as pd
-
 from vehicletracker.core import callback, VehicleTrackerNode
 
 _LOGGER = logging.getLogger(__name__)
