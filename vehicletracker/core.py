@@ -29,6 +29,7 @@ import aio_pika
 from aio_pika.exchange import ExchangeType
 
 from vehicletracker.const import (ATTR_EVENT_TYPE, ATTR_NODE_NAME, ATTR_NOW, EVENT_NODE_START, EVENT_NODE_STOP, EVENT_REPLY, EVENT_TIME_CHANGED, TIMEOUT_EVENT_START)
+from vehicletracker.helpers.json import DateTimeEncoder
 
 T = TypeVar("T")
 CALLABLE_T = TypeVar("CALLABLE_T", bound=Callable)
@@ -172,8 +173,7 @@ class VehicleTrackerNode:
         # stage 1
         self.state = NodeState.stopping
         self.async_track_tasks()
-        await self.events.async_publish({
-            ATTR_EVENT_TYPE: EVENT_NODE_STOP,
+        await self.events.async_publish(EVENT_NODE_STOP, {
             ATTR_NODE_NAME: self.name
         })
         await self.async_block_till_done()
@@ -301,6 +301,7 @@ class EventBus:
         self._listeners: Dict[str, Dict[str, List[Callable]]] = {} # map from domain -> event_type -> targets
         self._node = node
         self._future = asyncio.ensure_future(self.async_connect(), loop = self._node.loop)
+        self._json_encoder = DateTimeEncoder()
 
     async def async_connect(self):
         """Initialize connection to  new event bus."""
@@ -447,7 +448,7 @@ class EventBus:
         await self._future
         await self._event_exchange.publish(
             aio_pika.Message(
-                bytes(json.dumps(event_data), 'utf-8'),
+                bytes(self._json_encoder.encode(event_data), 'utf-8'),
                 content_type='application/json',
                 headers={
                     'event_type': event_type
@@ -461,7 +462,7 @@ class EventBus:
         await self._future
         await self._channel.default_exchange.publish(
             aio_pika.Message(
-                bytes(json.dumps(event_data), 'utf-8'),
+                bytes(self._json_encoder.encode(event_data), 'utf-8'),
                 content_type='application/json',
                 headers={
                     'event_type': event_type
