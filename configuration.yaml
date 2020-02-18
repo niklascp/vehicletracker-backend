@@ -6,6 +6,11 @@ http:
   
 predictor:
 
-trainer:
+#trainer:
 
-history_local:
+monitor:
+
+history:
+  data_source: 
+    class: vehicletracker.components.history.clients.MssqlHistoryDataSource    
+    connection_string: 'mssql+pyodbc://dwh03/DW_EDW?trusted_connection=yes&driver=ODBC+Driver+17+for+SQL+Server'

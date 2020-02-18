@@ -149,8 +149,7 @@ class Trainer():
         with open(os.path.join(MODEL_CACHE_PATH, metadata_file_name), 'w') as f:
             json.dump(metadata, f)
         
-        self.node.events.publish({
-            'eventType': 'link_model_available',
+        self.node.events.publish('link_model_available', {
             'metadata': metadata
         })
 

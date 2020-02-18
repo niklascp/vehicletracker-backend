@@ -11,6 +11,8 @@ from aiohttp import web
 from aiohttp.web_exceptions import HTTPMovedPermanently
 import aiohttp_cors
 
+from vehicletracker.const import EVENT_REPLY, EVENT_TIME_CHANGED
+
 DOMAIN = "http"
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,8 +64,11 @@ async def async_setup(node, config):
         buffer = asyncio.Queue() 
 
         async def forward_events(event):
-            if event['eventType'] != 'reply':
-                await buffer.put(event)
+            if event['eventType'] == EVENT_REPLY:
+                return
+            if event['eventType'] == EVENT_TIME_CHANGED:
+                return
+            await buffer.put(event)
 
         response = web.StreamResponse()
         response.content_type = "text/event-stream"

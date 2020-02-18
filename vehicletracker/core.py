@@ -3,6 +3,7 @@ Core components of Vehicle Tracker.
 """
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from async_timeout import timeout
 import functools
 import enum
 import logging
@@ -10,6 +11,9 @@ import threading
 import json
 import uuid
 import os
+from time import monotonic
+import datetime as dt
+import pytz
 
 from typing import (
     Optional,
@@ -24,7 +28,7 @@ from typing import (
 import aio_pika
 from aio_pika.exchange import ExchangeType
 
-from vehicletracker.const import (ATTR_EVENT_TYPE, ATTR_NODE_NAME, EVENT_NODE_START, EVENT_NODE_STOP)
+from vehicletracker.const import (ATTR_EVENT_TYPE, ATTR_NODE_NAME, ATTR_NOW, EVENT_NODE_START, EVENT_NODE_STOP, EVENT_REPLY, EVENT_TIME_CHANGED, TIMEOUT_EVENT_START)
 
 T = TypeVar("T")
 CALLABLE_T = TypeVar("CALLABLE_T", bound=Callable)
@@ -108,15 +112,8 @@ class VehicleTrackerNode:
             from vehicletracker.helpers.signal import async_register_signal_handling
             async_register_signal_handling(self)
 
-        #import time
-        #while True:
-        #    time.sleep(1)
-        #    print("a")
-
         await asyncio.sleep(0)
-        print( self.state)
         await self._stopped.wait()
-        print("Here")
         return self.exit_code
 
     async def async_start(self) -> None:
@@ -127,27 +124,25 @@ class VehicleTrackerNode:
         self.state = NodeState.starting
 
         setattr(self.loop, "_thread_ident", threading.get_ident())
-        await self.events.async_publish({
-            ATTR_EVENT_TYPE: EVENT_NODE_START,
+        await self.events.async_publish(EVENT_NODE_START, {
             ATTR_NODE_NAME: self.name
         })
 
         await self.async_block_till_done()
-        #try:
-        #    # Only block for EVENT_HOMEASSISTANT_START listener
-        #    self.async_stop_track_tasks()
-        #    with timeout(TIMEOUT_EVENT_START):
-        #        await self.async_block_till_done()
-        #except asyncio.TimeoutError:
-        #    _LOGGER.warning(
-        #        "Something is blocking Home Assistant from wrapping up the "
-        #        "start up phase. We're going to continue anyway. Please "
-        #        "report the following info at http://bit.ly/2ogP58T : %s",
-        #        ", ".join(self.config.components),
-        #    )
+        try:
+            # Only block for EVENT_NODE_START listener
+            self.async_stop_track_tasks()
+            with timeout(TIMEOUT_EVENT_START):
+                await self.async_block_till_done()
+            
+        except asyncio.TimeoutError:
+            _LOGGER.warning(
+                "Something is blocking Vehicle Tracker from wrapping up the "
+                "start up phase. We're going to continue anyway."
+            )
 
         self.state = NodeState.running
-        #_async_create_timer(self)
+        await _async_create_timer(self)
 
     def stop(self) -> None:
         """Stop Vehicle Tracker Node and shuts down all threads."""
@@ -176,7 +171,7 @@ class VehicleTrackerNode:
 
         # stage 1
         self.state = NodeState.stopping
-        #self.async_track_tasks()
+        self.async_track_tasks()
         await self.events.async_publish({
             ATTR_EVENT_TYPE: EVENT_NODE_STOP,
             ATTR_NODE_NAME: self.name
@@ -211,6 +206,22 @@ class VehicleTrackerNode:
                 await asyncio.wait(pending)
             else:
                 await asyncio.sleep(0)
+
+    @callback
+    def async_run_job(self, target: Callable[..., None], *args: Any) -> None:
+        """Run a job from within the event loop.
+        This method must be run in the event loop.
+        target: target to call.
+        args: parameters for method to call.
+        """
+        if (
+            not asyncio.iscoroutine(target)
+            and not asyncio.iscoroutinefunction(target)
+            and is_callback(target)
+        ):
+            target(*args)
+        else:
+            self.async_add_job(target, *args)
 
     def add_job(self, target: Callable[..., Any], *args: Any) -> None:
         """Add job to the executor pool.
@@ -267,6 +278,16 @@ class VehicleTrackerNode:
 
         return task
 
+    @callback
+    def async_track_tasks(self) -> None:
+        """Track tasks so you can wait for all tasks to be done."""
+        self._track_task = True
+
+    @callback
+    def async_stop_track_tasks(self) -> None:
+        """Stop track tasks so you can't wait for all tasks to be done."""
+        self._track_task = False
+
 EVENTS_EXCHANGE_NAME = 'vehicletracker-events'
 
 class EventBus:
@@ -300,12 +321,8 @@ class EventBus:
             async for message in queue_iter:
                 async with message.process():
                     event_type = message.headers['event_type']
-                    domain_listeners = self._listeners.get(domain, {})
-                    event = json.loads(message.body)
-                    for target in domain_listeners.get(event_type, []):
-                        self._node.async_add_job(target, event)
-                    for target in domain_listeners.get('*', []):
-                        self._node.async_add_job(target, event)
+                    event_data = json.loads(message.body)
+                    self.publish_local(event_type, event_data, domain)
 
     async def _async_remove_listener(self, domain : str, event_type : str, target : Callable):
         """Remove a listener of a specific event_type.
@@ -373,7 +390,7 @@ class EventBus:
         """Listen for the given event_type on the domain"""
 
         if domain:
-            _LOGGER.info("Listening for %s (domain).", event_type)
+            _LOGGER.info("Listening for %s (domain: %s).", event_type, domain)
         else:
             _LOGGER.info("Listening for %s (node).", event_type)
             domain = 'node-' + self._node.name
@@ -402,42 +419,59 @@ class EventBus:
 
         return remove_listener
 
-    def publish(self, event : Dict[str, Any]) -> None:
+    def publish_local(self, event_type, event_data : Dict[str, Any], domain : str = None) -> None:
+        if domain:            
+            _LOGGER.info("Publishing local event '%s' for domain '%s'", event_type, domain)
+        else:
+            if event_type != EVENT_TIME_CHANGED:
+                _LOGGER.info("Publishing local event '%s' for node", event_type)
+            domain = 'node-' + self._node.name
+        
+        domain_listeners = self._listeners.get(domain, {})
+        for target in domain_listeners.get(event_type, []):
+            self._node.async_add_job(target, event_data)
+        for target in domain_listeners.get('*', []):
+            self._node.async_add_job(target, event_data)
+
+    def publish(self, event_type : str, event_data : Dict[str, Any]) -> None:
         """Publish an event."""
         return asyncio.run_coroutine_threadsafe(
-            self.async_publish(event), 
+            self.async_publish(event_type, event_data), 
             loop = self._node.loop).result()
 
-    async def async_publish(self, event : Dict[str, Any]):
+    async def async_publish(self, event_type : str, event_data : Dict[str, Any]):
         """Publish an event."""
+
+        _LOGGER.info("Publishing global event '%s'", event_type)
+
         await self._future
         await self._event_exchange.publish(
             aio_pika.Message(
-                bytes(json.dumps(event), 'utf-8'),
+                bytes(json.dumps(event_data), 'utf-8'),
                 content_type='application/json',
                 headers={
-                    'event_type': event['eventType']
+                    'event_type': event_type
                 }
             ),
-            event['eventType']
+            event_type
         )
 
-    async def async_reply(self, event, to_node):
+    async def async_reply(self, event_type : str, event_data : Dict[str, Any], to_node):
         """Publish a reply."""
         await self._future
         await self._channel.default_exchange.publish(
             aio_pika.Message(
-                bytes(json.dumps(event), 'utf-8'),
+                bytes(json.dumps(event_data), 'utf-8'),
                 content_type='application/json',
                 headers={
-                    'event_type': event['eventType']
+                    'event_type': event_type
                 }
             ),
             to_node
         )
 
 class ServiceBus:
-    """Offer the services over the eventbus."""
+    """Offer Services over the Event Bus."""
 
     def __init__(self, node: VehicleTrackerNode) -> None:
         """Initialize a service registry."""
@@ -491,16 +525,14 @@ class ServiceBus:
 
             try:
                 result = await self._node.async_add_job(service_func, service_data)
-                await self._node.events.async_reply({
-                        'eventType': 'reply',
+                await self._node.events.async_reply(EVENT_REPLY, {
                         'result': result,
                         'correlationId': correlation_id,
                     }, to_node = reply_to)
             except Exception as ex: # pylint: disable=broad-except
                 _LOGGER.exception("Error in executing service '%s' (correlation_id: %s, timeout: %s, reply_to = %s)",
                     service, correlation_id, timeout, reply_to)
-                await self._node.events.async_reply({
-                        'eventType': 'reply',
+                await self._node.events.async_reply(EVENT_REPLY, {
                         'result': {
                             'error': str(ex)
                         },
@@ -545,8 +577,7 @@ class ServiceBus:
         self._wait_events[correlation_id] = asyncio.Event()
         _LOGGER.info("Call service '%s' (correlation_id: %s, timeout: %s).", service, correlation_id, timeout)
 
-        task = self._node.events.async_publish({
-            'eventType': service,
+        task = self._node.events.async_publish(service, {
             'serviceData': service_data,
             'replyTo': 'node-' + self._node.name,
             'correlationId': correlation_id,
@@ -615,3 +646,40 @@ async def async_setup_component(
     except Exception:
         _LOGGER.exception("Failed to setup component '%s'.", domain)
         return False
+
+async def _async_create_timer(node: VehicleTrackerNode) -> None:
+    """Create a timer that will start on NODE_START."""
+    handle = None
+
+    def schedule_tick(now) -> None:
+        """Schedule a timer tick when the next second rolls around."""
+        nonlocal handle
+        
+        slp_seconds = 1 - (now.microsecond / 10 ** 6)
+        target = monotonic() + slp_seconds
+        handle = node.loop.call_later(slp_seconds, fire_time_event, target)
+
+    @callback
+    def fire_time_event(target) -> None:
+        """Fire next time event."""
+        now = dt.datetime.now(pytz.utc)
+        node.events.publish_local(EVENT_TIME_CHANGED, {ATTR_NOW: now})
+
+        # If we are more than a second late, a tick was missed
+        ##late = monotonic() - target
+        #if late > 1:
+        #    node.events.async_fire(EVENT_TIMER_OUT_OF_SYNC, {ATTR_SECONDS: late})
+
+        schedule_tick(now)
+
+    @callback
+    def stop_timer(_) -> None:
+        """Stop the timer."""
+        if handle is not None:
+            _LOGGER.info("Timer is stopping.")
+            handle.cancel()
+    
+    await node.events.async_listen(EVENT_NODE_STOP, stop_timer)
+
+    _LOGGER.info("Timer is starting")
+    schedule_tick(dt.datetime.now(pytz.utc))
