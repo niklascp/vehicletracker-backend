@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_SERVER_HOST = "0.0.0.0"
 DEFAULT_SERVER_PORT = 5000
 
-STREAM_PING_EVENT = ('ping', None)
+STREAM_PING_EVENT = ('ping', {})
 STREAM_PING_INTERVAL = 50
 
 async def async_setup(node, config):
