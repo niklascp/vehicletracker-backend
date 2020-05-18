@@ -12,14 +12,13 @@ import pandas as pd
 
 from vehicletracker.core import VehicleTrackerNode, callback
 from vehicletracker.helpers.model_store import LocalModelStore
+from vehicletracker.exceptions import ModelNotFound
 
 DOMAIN = 'predictor'
 
 _LOGGER = logging.getLogger(__name__)
 
 LINK_MODEL_PATH = './cache/lt-link-travel-time/'
-
-LINK_MODELS = {}
 
 async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):    
     """Sets up the predictor component"""
@@ -57,10 +56,18 @@ class Predictor():
         _LOGGER.debug("Recived link predict request for link '%s' using model '%s' at time %s.",
             link_ref, model_name, time)
 
+        if len(model_candidates) == 0:
+            raise ModelNotFound("No model condidates for link '{}' using model '{}' at time {} was found.".format(link_ref, model_name, time))
+
+        model = self.link_model_store.get_model(model_candidates[0]['ref'])
+
         index = pd.DatetimeIndex([time])
         pred = model.predict(index)
 
-        return pred[0, 0]
+        return [{
+            'model': model_name,
+            'predicted': round(pred[0, 0], 1)
+        }]
 
     def list_link_models(self, service_data):        
         """Service handler for 'list_link_models'. List available link models."""
@@ -71,6 +78,6 @@ class Predictor():
         return self.link_model_store.list_models(model_name, link_ref, time)
 
     @callback
-    def link_model_available(self, event):
+    def link_model_available(self, event_type, event_data):
         """Event callback for 'link_model_available'"""
-        self.link_model_store.add_model(event['metadata'])
+        self.link_model_store.add_model(event_data['metadata'])

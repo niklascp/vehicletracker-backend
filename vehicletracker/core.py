@@ -411,7 +411,7 @@ class EventBus:
         if event_type in self._listeners[domain]:
             self._listeners[domain][event_type].append(target)
         else:
-            await self._domain_queues[domain].bind(self._event_exchange, '#' if event_type == '*' else event_type)
+            await self._domain_queues[domain].bind(self._event_exchange, '#' if event_type == '*' else event_type + '.#')
             self._listeners[domain][event_type] = [target]
 
         def remove_listener() -> None:
@@ -430,9 +430,9 @@ class EventBus:
         
         domain_listeners = self._listeners.get(domain, {})
         for target in domain_listeners.get(event_type, []):
-            self._node.async_add_job(target, event_data)
+            self._node.async_add_job(target, event_type, event_data)
         for target in domain_listeners.get('*', []):
-            self._node.async_add_job(target, event_data)
+            self._node.async_add_job(target, event_type, event_data)
 
     def publish(self, event_type : str, event_data : Dict[str, Any]) -> None:
         """Publish an event."""
@@ -482,9 +482,9 @@ class ServiceBus:
         asyncio.ensure_future(self._node.events.async_listen('reply', self._async_handle_reply))
 
     @callback
-    def _async_handle_reply(self, event):
-        correlation_id = event['correlationId']
-        result = event['result']
+    def _async_handle_reply(self, event_type, event_data):
+        correlation_id = event_data['correlationId']
+        result = event_data['result']
         self._results[correlation_id] = result
         self._wait_events[correlation_id].set()
 
@@ -515,11 +515,11 @@ class ServiceBus:
         domain = domain.lower()
         service = service.lower()
 
-        async def service_wrapper(event : Dict[str, Any]):
-            service_data = event['serviceData']
-            correlation_id = event['correlationId']
+        async def service_wrapper(event_type : str, event_data : Dict[str, Any]):
+            service_data = event_data['serviceData']
+            correlation_id = event_data['correlationId']
             timeout = 30
-            reply_to = event['replyTo']
+            reply_to = event_data['replyTo']
 
             _LOGGER.info("Handling service request for '%s' (correlation_id: %s, timeout: %s, reply_to = %s).", 
                 service, correlation_id, timeout, reply_to)

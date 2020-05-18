@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_SERVER_HOST = "0.0.0.0"
 DEFAULT_SERVER_PORT = 5000
 
-STREAM_PING_EVENT = { 'eventType': 'ping' }
+STREAM_PING_EVENT = ('ping', None)
 STREAM_PING_INTERVAL = 50
 
 async def async_setup(node, config):
@@ -63,12 +63,12 @@ async def async_setup(node, config):
     async def event_stream(request):
         buffer = asyncio.Queue() 
 
-        async def forward_events(event):
-            if event['eventType'] == EVENT_REPLY:
+        async def forward_events(event_type, event_data):
+            if event_type == EVENT_REPLY:
                 return
-            if event['eventType'] == EVENT_TIME_CHANGED:
+            if event_type == EVENT_TIME_CHANGED:
                 return
-            await buffer.put(event)
+            await buffer.put((event_type, event_data))
 
         response = web.StreamResponse()
         response.content_type = "text/event-stream"
@@ -82,18 +82,18 @@ async def async_setup(node, config):
             _LOGGER.debug("STREAM %s ATTACHED", id(buffer))
 
             # Fire off one message so browsers fire open event right away
-            await forward_events(STREAM_PING_EVENT)
+            await forward_events(*STREAM_PING_EVENT)
 
             while True:
                 try:
                     with async_timeout.timeout(STREAM_PING_INTERVAL):
-                        payload = await buffer.get()
+                        event_type, event_data = await buffer.get()
 
-                    msg = f"data: {payload}\n\n"
+                    msg = f"event: {event_type}\ndata: {event_data}\n\n"
                     _LOGGER.debug("STREAM %s WRITING %s", id(buffer), msg.strip())
                     await response.write(msg.encode("UTF-8"))
                 except asyncio.TimeoutError:
-                    await forward_events(STREAM_PING_EVENT)
+                    await forward_events(*STREAM_PING_EVENT)
 
         except asyncio.CancelledError:
             _LOGGER.debug("STREAM %s ABORT", id(buffer))

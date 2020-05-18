@@ -64,7 +64,7 @@ async def async_track_utc_time_change(
     last_now: Optional[datetime] = None
 
     @callback
-    def pattern_time_change_listener(event_data) -> None:
+    def pattern_time_change_listener(_, event_data) -> None:
         """Listen for matching time_changed events."""
         nonlocal next_time, last_now
 

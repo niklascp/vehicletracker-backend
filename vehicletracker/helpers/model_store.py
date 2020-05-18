@@ -12,6 +12,7 @@ class LocalModelStore():
     def __init__(self, path):
         self.path = path
         self.models : Dict[str, ] = {}
+        self.model_cache : Dict[str, ] = {}
         self.spatial_map : Dict[str, List[str]] = {}
 
     def load_metadata(self):
@@ -44,6 +45,9 @@ class LocalModelStore():
         model_metadata['ref'] = model_ref        
         exists = model_ref in self.models
 
+        if model_ref in self.model_cache:
+            del self.model_cache[model_ref]
+        
         self.models[model_ref] = model_metadata
 
         if not model_metadata['linkRef'] in self.spatial_map:
@@ -77,17 +81,16 @@ class LocalModelStore():
 
         return list(candidates)
 
-    def load_model(self, model_hash):
-        pass
-        #for file_name in os.listdir(MODEL_CACHE_PATH):
-        #    if (file_name.endswith(".json")):
-        #        _LOGGER.info(f'Loading cached model from data from {file_name}')
-        #        metadata_file_path = os.path.join(MODEL_CACHE_PATH, file_name)
-        #        model_file_path = os.path.splitext(os.path.join(MODEL_CACHE_PATH, file_name))[0] + '.joblib'
-        #        
-        #        with open(metadata_file_path, 'r') as f:
-        #            model_metadata = json.load(f)
-        #        with open(model_file_path, 'rb') as f:
-        #            model = joblib.load(f)
-        #        
-        #        LINK_MODELS[model_metadata['linkRef']] = { 'model': model, 'metadata': model_metadata }
+    def get_model(self, model_ref):
+
+        # Load from memory
+        if model_ref in self.model_cache:
+            return self.model_cache[model_ref]
+
+        # Load from disk
+        model_metadata = self.models[model_ref]
+        with open(model_metadata['resourceUrl'], 'rb') as f:
+            model = joblib.load(f)
+            self.model_cache[model_ref] = model
+
+        return model
