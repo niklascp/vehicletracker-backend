@@ -3,6 +3,6 @@ class ApplicationError(Exception):
    pass
 
 class ModelNotFound(ApplicationError):
-   """Base class for other exceptions"""
+   """Raised when no model meeting the specification could be found."""
    def __init__(self, message):
       self.message = message

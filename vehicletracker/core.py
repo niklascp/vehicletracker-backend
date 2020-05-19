@@ -674,7 +674,7 @@ async def _async_create_timer(node: VehicleTrackerNode) -> None:
         schedule_tick(now)
 
     @callback
-    def stop_timer(_) -> None:
+    def stop_timer(_, __) -> None:
         """Stop the timer."""
         if handle is not None:
             _LOGGER.info("Timer is stopping.")

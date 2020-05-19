@@ -8,6 +8,7 @@ from typing import (
     Any
 )
 
+import numpy as np
 import pandas as pd
 
 from vehicletracker.core import VehicleTrackerNode, callback
@@ -30,7 +31,7 @@ async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):
     # Wire up events and services
     await node.services.async_register(DOMAIN, 'link_predict', predictor.predict)
     await node.services.async_register(DOMAIN, 'link_models', predictor.list_link_models)
-    await node.events.async_listen('link_model_available', predictor.link_model_available)
+    await node.events.async_listen('link_model_available', predictor.link_model_available)    
 
     return True
 
@@ -45,28 +46,45 @@ class Predictor():
         _LOGGER.info('Loading cached models from persistent store ...')
         self.link_model_store.load_metadata()
 
-    def predict(self, event):
-        """Service handler for 'link_predict'. Predicts a single link at a single point in time."""
+    
 
+    def predict(self, event):
+        """Service handler for 'link_predict'. Predicts a single link at one or more points in time."""
+
+        # link_ref and time are required, model is optional.
         link_ref = event['linkRef']
-        time = datetime.fromisoformat(event.get('time')) if event.get('time') else datetime.now()
-        model_name = event['model']
-        model_candidates = self.link_model_store.list_models(model_name, link_ref, time)
+        time = event.get('time')
+        model_name = event.get('model')
+        
+        if isinstance(time, str):
+            time_min = datetime.fromisoformat(time)
+            time_ = [time_min]
+        elif isinstance(time, list):
+            time_ = pd.to_datetime(np.cumsum(time), unit='s')
+            time_min = time_.min()
+        else:
+            time_min = datetime.now()
+            time_ = [time_min]
+
+        model_candidates = self.link_model_store.list_models(model_name, link_ref, time_min)
 
         _LOGGER.debug("Recived link predict request for link '%s' using model '%s' at time %s.",
-            link_ref, model_name, time)
+            link_ref, model_name, time_min)
 
         if len(model_candidates) == 0:
-            raise ModelNotFound("No model condidates for link '{}' using model '{}' at time {} was found.".format(link_ref, model_name, time))
+            _LOGGER.warning("No model condidates for link '%s' using model '%s' at time %s was found.", link_ref, model_name, time)
+            return []
 
-        model = self.link_model_store.get_model(model_candidates[0]['ref'])
+        model_ref = model_candidates[0]['ref']
+        model = self.link_model_store.get_model(model_ref)
 
-        index = pd.DatetimeIndex([time])
+        index = pd.DatetimeIndex(time_)
         pred = model.predict(index)
 
         return [{
             'model': model_name,
-            'predicted': round(pred[0, 0], 1)
+            'model_ref': model_ref,
+            'predicted': np.round(np.squeeze(pred), 1) if len(time_) == 1 else list(np.round(np.squeeze(pred), 1))
         }]
 
     def list_link_models(self, service_data):        

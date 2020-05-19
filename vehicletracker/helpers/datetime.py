@@ -11,7 +11,7 @@ from vehicletracker.const import MATCH_ALL
 
 DATE_STR_FORMAT = "%Y-%m-%d"
 UTC = pytz.utc
-DEFAULT_TIME_ZONE: dt.tzinfo = pytz.utc
+DEFAULT_TIME_ZONE: dt.tzinfo = pytz.timezone('Europe/Copenhagen')
 
 # Copyright (c) Django Software Foundation and individual contributors.
 # All rights reserved.

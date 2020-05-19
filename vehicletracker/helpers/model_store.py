@@ -59,7 +59,7 @@ class LocalModelStore():
     def list_models(self, model_name, spatial_ref, temporal_ref):
         """List relevent models for a given spatial and temporal reference"""
         if spatial_ref:
-            candidates = [self.models[ref] for ref in self.spatial_map[spatial_ref]]
+            candidates = [self.models[ref] for ref in self.spatial_map.get(spatial_ref) or []]
         else:
             candidates = self.models.values()
             

@@ -49,7 +49,7 @@ async def async_setup(node, config):
 
     async def service(request):
         service = request.match_info['service']
-        service_data = {}
+        service_data = await request.json() if request.body_exists else {}
         for key, value in request.rel_url.query.items():
             service_data[key] = value
         result = await node.services.async_call(

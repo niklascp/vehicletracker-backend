@@ -9,7 +9,7 @@ from shapely.ops import linemerge
 
 from vehicletracker.core import callback, VehicleTrackerNode
 from vehicletracker.helpers.events import async_track_utc_time_change
-from vehicletracker.helpers.datetime import utcnow, parse_datetime
+from vehicletracker.helpers.datetime import utcnow, parse_datetime, as_local, as_utc
 from vehicletracker.helpers.json import DateTimeEncoder
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,8 +21,14 @@ async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):
 
     monitor = node.data[DOMAIN] = Monitor(node, config[DOMAIN])
 
-    await node.events.async_listen('linkCompleted', monitor.link_completed)
     await node.events.async_listen('vehicleJourneyAssignment', monitor.vehicle_journey_assignment)
+    
+    await node.events.async_listen('linkCompleted', monitor.link_completed)
+    await node.events.async_listen('departure', monitor.updated_departure)
+    await node.events.async_listen('estimated_departure', monitor.updated_departure)
+    await node.events.async_listen('arrival', monitor.updated_arrival)
+    await node.events.async_listen('estimated_arrival', monitor.updated_arrival)
+
     await node.services.async_register(DOMAIN, 'journeys', monitor.list_journeys)
     await node.services.async_register(DOMAIN, 'journey_details', monitor.journey_details)
     await node.services.async_register(DOMAIN, 'stop_points', monitor.list_stop_points)
@@ -41,8 +47,8 @@ class Monitor():
         try:
             with open('cache/journeys.json', 'r') as f:
                 self.journey_map = json.load(f)
-        except:
-            _LOGGER.warning('Failed to restore journey cache')
+        except (FileNotFoundError, json.JSONDecodeError) as e: 
+            _LOGGER.warning('Failed to restore journey cache: %s', e.msg)
             self.journey_map = {}
 
         self.stop_points = {}
@@ -88,7 +94,85 @@ class Monitor():
             except StopIteration:
                 _LOGGER.warning(
                     'Could not find link for journey: %s, sequence_number: %s.',
-                    journey_ref, sequence_number)
+                    journey_ref, sequence_number)    
+
+    def updated_departure(self, event_type, event_data):
+        journey_ref = event_data['journeyRef']
+        sequence_number = event_data['sequenceNumber']
+        departure_time = parse_datetime(event_data['observedUtc']) if event_type == 'departure' else event_data['estimatedUtc']
+        journey = self.journey_map.get(journey_ref)
+        
+        if journey is None:
+            return
+
+        if event_type == 'departure':
+            journey['state'] = 'Run'
+
+        try:
+            ix, link = next((ix, ln) for (ix, ln) in enumerate(journey['links']) if ln['sequenceNumber'] >= sequence_number)
+            link_predictions = self.node.services.call('link_predict', { 'linkRef': link['linkRef'], 'time': as_local(departure_time) }) 
+
+            if len(link_predictions) == 0:
+                # Fallback to timetable
+                predicted = link['plannedTime']
+            else:
+                predicted = link_predictions[0]['predicted'] #TODO: Just dont take the first!
+
+            link['predictedTime'] = predicted
+            link['predictedUpdated'] = utcnow()
+            link['predictions'] = link_predictions
+
+            self.node.events.publish_local('estimated_arrival', {
+                'journeyRef': journey_ref,
+                'sequenceNumber': sequence_number + 1, #TODO: Not always correct!
+                'estimatedUtc': departure_time + timedelta(seconds=predicted)
+            })
+
+        except StopIteration:
+            _LOGGER.warning(
+                'Could not find link for journey: %s, sequence_number: %s.',
+                journey_ref, sequence_number)    
+
+    def updated_arrival(self, event_type, event_data): 
+        """Event handler for 'arrival' and 'estimated_arrival'. Predicts dwell time and cascade downstream via estimated_departure event."""
+
+         #ignore passed arrivals, update will cascade from the corresponding departure.
+        if event_type == 'arrival' and event_data['state'] == 'PASSED':
+            return
+
+        journey_ref = event_data['journeyRef']
+        sequence_number = event_data['sequenceNumber']
+        arrival_time = parse_datetime(event_data['observedUtc']) if event_type == 'arrival' else event_data['estimatedUtc']
+        journey = self.journey_map.get(journey_ref)
+        
+        if journey is None:
+            return
+
+        if event_type == 'arrival':
+            journey['state'] = 'Dwell'
+
+        try:
+            ix, stop = next((ix, ln) for (ix, ln) in enumerate(journey['stops']) if ln['sequenceNumber'] >= sequence_number)
+
+            predicted = 0
+
+            stop['predictedTime'] = predicted
+            stop['predictedUpdated'] = utcnow()
+
+            if ix < len(journey['stops']) - 1:
+                # This is not the last stop: Emit estimated departure
+                self.node.events.publish_local('estimated_departure', {
+                    'journeyRef': journey_ref,
+                    'sequenceNumber': sequence_number,
+                    'estimatedUtc': arrival_time + timedelta(seconds=predicted)
+                })
+
+        except StopIteration:
+            _LOGGER.warning(
+                'Could not find link for journey: %s, sequence_number: %s.',
+                journey_ref, sequence_number)    
+
+    # Helper API methods<<<<<<s
 
     def journey_details(self, service_data):
         if 'journeyRef' in service_data:
