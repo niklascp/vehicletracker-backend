@@ -109,7 +109,7 @@ class Trainer():
             'linkRef': link_ref,
             'time': time.isoformat(),
             'n': n
-        }, timeout = 5)
+        }, timeout = 10)
 
         if 'error' in train_data:
             raise ApplicationError(f"error getting train data: {train_data['error']}")

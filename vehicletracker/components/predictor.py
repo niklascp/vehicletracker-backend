@@ -75,15 +75,15 @@ class Predictor():
             _LOGGER.warning("No model condidates for link '%s' using model '%s' at time %s was found.", link_ref, model_name, time)
             return []
 
-        model_ref = model_candidates[0]['ref']
-        model = self.link_model_store.get_model(model_ref)
+        model_metadata = model_candidates[0]
+        model = self.link_model_store.get_model(model_metadata['ref'])
 
         index = pd.DatetimeIndex(time_)
         pred = model.predict(index)
 
         return [{
-            'model': model_name,
-            'model_ref': model_ref,
+            'model': model_metadata['model'],
+            'model_ref': model_metadata['ref'],
             'predicted': np.round(np.squeeze(pred), 1) if len(time_) == 1 else list(np.round(np.squeeze(pred), 1))
         }]
 

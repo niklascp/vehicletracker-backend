@@ -6,11 +6,21 @@ http:
   
 predictor:
 
-#trainer:
+trainer:
+
+schedule_loader:
+  connection_string: 'mssql+pyodbc://dwh03/DW_EDW?trusted_connection=yes&driver=ODBC+Driver+17+for+SQL+Server'
 
 monitor:
-
+  
 history:
   data_source: 
     class: vehicletracker.components.history.clients.MssqlHistoryDataSource    
     connection_string: 'mssql+pyodbc://dwh03/DW_EDW?trusted_connection=yes&driver=ODBC+Driver+17+for+SQL+Server'
+
+logger:
+  default: info
+  logs:
+    # log level for core
+    vehicletracker.core: warn
+    vehicletracker.components.predictor: error

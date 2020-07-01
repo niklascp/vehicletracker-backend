@@ -105,7 +105,8 @@ from
     [data].[RT_Journey] j
     join [dim].[JourneyPattern] jp on jp.[JourneyPatternId] = j.[JourneyPatternId] and jp.[IsCurrent] = 1
 where
-    j.[LineNumber] in (10, 15, 150, 375)
+    --j.[LineNumber] in (10, 15, 150, 375)
+    j.[LineNumber] in (10, 375)
     and getdate() between dateadd(minute, -15, [PlannedStartDateTime]) and [PlannedEndDateTime]
 order by
     [PlannedStartDateTime]
@@ -124,8 +125,8 @@ order by
 select 
     [sequenceNumber] = [SequenceNumber],
     [stopPointRef] = cast(p.[StopPointNumber] as nvarchar(20)),
-    [plannedArrivalTime] = p.[PlannedArrivalDateTime],
-    [plannedDepartureTime] = p.[PlannedDepartureDateTime]
+    [plannedArrivalUtc] = p.[PlannedArrivalDateTime] at time zone 'Central European Standard Time' at time zone 'UTC',
+    [plannedDepartureUtc] = p.[PlannedDepartureDateTime] at time zone 'Central European Standard Time' at time zone 'UTC'
 from
     [data].[RT_JourneyPoint] p
 where

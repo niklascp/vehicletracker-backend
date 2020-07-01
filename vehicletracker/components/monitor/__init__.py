@@ -48,7 +48,7 @@ class Monitor():
             with open('cache/journeys.json', 'r') as f:
                 self.journey_map = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e: 
-            _LOGGER.warning('Failed to restore journey cache: %s', e.msg)
+            _LOGGER.warning('Failed to restore journey cache: %s', e)
             self.journey_map = {}
 
         self.stop_points = {}
@@ -64,9 +64,13 @@ class Monitor():
         invalid_from_utc = event_data['vehicleJourneyAssignment']['invalidFromUtc']
 
         if journey_ref in self.journey_map:
-            self.journey_map[journey_ref]['vehicleRef'] = vehicle_ref
-            self.journey_map[journey_ref]['vehicleValidFromUtc'] = valid_from_utc
-            self.journey_map[journey_ref]['vehicleValidToUtc'] = invalid_from_utc
+            journey = self.journey_map[journey_ref]
+            journey['vehicleRef'] = vehicle_ref
+            journey['vehicleValidFromUtc'] = valid_from_utc
+            journey['vehicleValidToUtc'] = invalid_from_utc
+
+            if invalid_from_utc and journey['linkIndex'] >= len(journey['links']) - 2:
+                journey['state'] = 'Completed'
 
     def link_completed(self, event_type, event_data):
         """Event handler for 'linkCompleted'. Collects true link time for error calculation."""
@@ -87,10 +91,20 @@ class Monitor():
                     return
                 link['vehicleRef'] = event_data['vehicleRef']
                 link['observedTime'] = event_data['travelTimeSeconds']
+
+                if link.get('predictions'):
+                    for pred in link['predictions']:
+                        pred['error'] = event_data['travelTimeSeconds'] - pred['predicted']                        
+
+                if link.get('predictedTime'):
+                    link['error'] = event_data['travelTimeSeconds'] - link['predictedTime']
+                    link['errorAcc'] = journey.get('linkErrorAcc', 0) + link['error']
+                    journey['linkErrorAcc'] = journey.get('linkErrorAcc', 0) + link['error']
+
                 # Progress the link one ahead
                 if ix + 1 < len(journey['links']):
-                    self.journey_map[journey_ref]['linkIndex'] = ix + 1
-                self.journey_map[journey_ref]['currentDistance'] = link['totalDistance']
+                    journey['linkIndex'] = ix + 1
+                journey['currentDistance'] = link['totalDistance']
             except StopIteration:
                 _LOGGER.warning(
                     'Could not find link for journey: %s, sequence_number: %s.',
@@ -103,43 +117,44 @@ class Monitor():
         journey = self.journey_map.get(journey_ref)
         
         if journey is None:
-            return
-
-        if event_type == 'departure':
-            journey['state'] = 'Run'
+            return    
 
         try:
-            ix, link = next((ix, ln) for (ix, ln) in enumerate(journey['links']) if ln['sequenceNumber'] >= sequence_number)
-            link_predictions = self.node.services.call('link_predict', { 'linkRef': link['linkRef'], 'time': as_local(departure_time) }) 
-
-            if len(link_predictions) == 0:
-                # Fallback to timetable
-                predicted = link['plannedTime']
-            else:
-                predicted = link_predictions[0]['predicted'] #TODO: Just dont take the first!
-
-            link['predictedTime'] = predicted
-            link['predictedUpdated'] = utcnow()
-            link['predictions'] = link_predictions
-
-            self.node.events.publish_local('estimated_arrival', {
-                'journeyRef': journey_ref,
-                'sequenceNumber': sequence_number + 1, #TODO: Not always correct!
-                'estimatedUtc': departure_time + timedelta(seconds=predicted)
-            })
-
+            link = next(ln for ln in journey['links'] if ln['sequenceNumber'] >= sequence_number)
+            stop = next(sp for sp in journey['stops'] if sp['sequenceNumber'] >= sequence_number)
         except StopIteration:
             _LOGGER.warning(
-                'Could not find link for journey: %s, sequence_number: %s.',
-                journey_ref, sequence_number)    
+                'Could not find link/stop for journey: %s, sequence_number: %s.',
+                journey_ref, sequence_number) 
+            return 
+
+        link_predictions = self.node.services.call('link_predict', { 'linkRef': link['linkRef'], 'time': as_local(departure_time) }) 
+
+        if len(link_predictions) == 0:
+            # Fallback to timetable
+            predicted = link['plannedTime']
+        else:
+            predicted = link_predictions[0]['predicted'] #TODO: Just dont take the first!
+
+        # Actual departure
+        if event_type == 'departure':
+            journey['state'] = 'Run'        
+            stop['observedDepartureUtc'] = departure_time
+            journey['delay'] = (departure_time - parse_datetime(stop['plannedDepartureUtc'])).total_seconds()
+
+        link['predictedTime'] = predicted
+        link['predictedUpdated'] = utcnow()
+        link['predictions'] = link_predictions
+
+        self.node.events.publish_local('estimated_arrival', {
+            'journeyRef': journey_ref,
+            'sequenceNumber': sequence_number + 1, #TODO: Not always correct!
+            'estimatedUtc': departure_time + timedelta(seconds=predicted)
+        })
 
     def updated_arrival(self, event_type, event_data): 
         """Event handler for 'arrival' and 'estimated_arrival'. Predicts dwell time and cascade downstream via estimated_departure event."""
-
-         #ignore passed arrivals, update will cascade from the corresponding departure.
-        if event_type == 'arrival' and event_data['state'] == 'PASSED':
-            return
-
+        
         journey_ref = event_data['journeyRef']
         sequence_number = event_data['sequenceNumber']
         arrival_time = parse_datetime(event_data['observedUtc']) if event_type == 'arrival' else event_data['estimatedUtc']
@@ -148,7 +163,7 @@ class Monitor():
         if journey is None:
             return
 
-        if event_type == 'arrival':
+        if event_type == 'arrival' and event_data['state'] == 'ARRIVED':
             journey['state'] = 'Dwell'
 
         try:
@@ -156,7 +171,16 @@ class Monitor():
 
             predicted = 0
 
-            stop['predictedTime'] = predicted
+            if event_type == 'arrival':
+                stop['observedArrivalUtc'] = arrival_time
+                #ignore passed arrivals, update will cascade from the corresponding departure.
+                if event_data['state'] == 'PASSED':
+                    return
+            else:
+                stop['predictedArrivalUtc'] = arrival_time
+            
+            stop['predictedDwellTime'] = predicted
+            stop['predictedDepartureUtc'] = arrival_time + timedelta(seconds=predicted)
             stop['predictedUpdated'] = utcnow()
 
             if ix < len(journey['stops']) - 1:
@@ -172,7 +196,7 @@ class Monitor():
                 'Could not find link for journey: %s, sequence_number: %s.',
                 journey_ref, sequence_number)    
 
-    # Helper API methods<<<<<<s
+    # Helper API methods
 
     def journey_details(self, service_data):
         if 'journeyRef' in service_data:
@@ -185,7 +209,7 @@ class Monitor():
             {
                 k: v.get(k)
                 for k in ['journeyRef', 'lineDesignation', 'plannedStartDateTime', 'plannedEndDateTime',
-                          'origin', 'destination', 'vehicleRef', 'state', 'currentDistance', 'totalDistance']
+                          'origin', 'destination', 'vehicleRef', 'state', 'delay', 'currentDistance', 'totalDistance']
             }
             for v in self.journey_map.values()
         ]
@@ -240,6 +264,7 @@ class Monitor():
             ]
         return None
 
+    # Background worker methods
 
     def fetch_stop_points(self, utc_time):   
         self.stop_points = {str(x['stopPointRef']): x for x in self.node.services.call('load_stop_points')}
@@ -266,7 +291,7 @@ class Monitor():
                 del self.journey_map[k]
                 removed_journey += 1
                 continue
-            
+
             if any([not link['linkRef'] in self.link_geometries for link in journey['links']]):
                 journey_link_geometries = self.node.services.call('load_link_geometry', { 'journeyRef': journey['journeyRef'] })
                 for link_geometry in journey_link_geometries:
@@ -279,4 +304,3 @@ class Monitor():
         # Dump cache if we stop...
         with open('cache/journeys.json', 'w') as f:
             f.write(self._json_encoder.encode(self.journey_map))
-        

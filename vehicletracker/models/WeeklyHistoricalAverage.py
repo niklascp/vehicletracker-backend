@@ -11,7 +11,7 @@ class WeeklyHistoricalAverage:
     def transform_ix(self, ix, freq):
         """ Map time into an integer interval [0; 7 * (24H/freq)[ representing the time of day and day of week with freq granuality. """
         timesteps_per_day = pd.to_timedelta('24H') / freq
-        return (ix.dayofweek.values * timesteps_per_day + ix.map(lambda x: pd.to_timedelta(x.time().isoformat())).values // freq).astype(int)
+        return (ix.dayofweek.values * timesteps_per_day + pd.to_timedelta(ix.hour * 60 * 60 + ix.minute * 60 + ix.second, unit='s') // freq).astype(int)
         
     def fit(self, ix, Y):
         if self.freq == 'auto':
