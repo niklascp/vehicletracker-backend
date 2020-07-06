@@ -1,9 +1,14 @@
 node:
   name: 'dev' 
   
-http:  
-  enable_cors: True
-  
+#http:  
+#  enable_cors: True
+
+model_registry:
+  models:
+    - name: NnMultiStopDwell
+      class: vehicletracker.models.dwell_time.NnMultiStopDwell
+
 predictor:
 
 trainer:
