@@ -22,6 +22,6 @@ async def test_mock_model():
     await node.async_start()
     assert await async_setup_component(node, model_registry.DOMAIN, CONFIG) == True
 
-    assert len(node.data[model_registry.DOMAIN].models) == 1
-    assert 'MockModel' in node.data[model_registry.DOMAIN].models
+    assert len(node.data[model_registry.DOMAIN].model_classes) == 1
+    assert 'MockModel' in node.data[model_registry.DOMAIN].model_classes
     await node.async_stop()
