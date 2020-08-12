@@ -1,6 +1,7 @@
 """Persistant model store"""
 
 import os
+import pathlib
 import json
 from datetime import datetime
 
@@ -8,11 +9,11 @@ import joblib
 from typing import (Dict, List)
 
 class LocalModelStore():
+    """This class should only facilitate storage of models."""
     
     def __init__(self, path):
         self.path = path
-        self.models : Dict[str, ] = {}
-        self.model_cache : Dict[str, ] = {}
+        self.models : Dict[str, ] = {}        
         self.spatial_map : Dict[str, List[str]] = {}
 
     def load_metadata(self):
@@ -20,13 +21,9 @@ class LocalModelStore():
         if not os.path.exists(self.path):
             os.makedirs(self.path)
 
-        for file_name in os.listdir(self.path):
-            if not file_name.endswith(".json"):
-                continue
-
-            metadata_file_path = os.path.join(self.path, file_name)
-
-            with open(metadata_file_path, 'r') as f:
+        path = pathlib.Path(self.path)
+        for file_name in path.glob('**/metadata.json'):
+            with open(file_name, 'r') as f:
                 model_metadata = json.load(f)
                 self.add_model(model_metadata)
 
@@ -44,21 +41,18 @@ class LocalModelStore():
 
         model_metadata['ref'] = model_ref        
         exists = model_ref in self.models
-
-        if model_ref in self.model_cache:
-            del self.model_cache[model_ref]
         
         self.models[model_ref] = model_metadata
 
-        if not model_metadata['linkRef'] in self.spatial_map:
-            self.spatial_map[model_metadata['linkRef']] = []
-        if not exists:
-            self.spatial_map[model_metadata['linkRef']].append(model_ref)
-
+        for spatial_ref in model_metadata['spatialRefs']:
+            if not spatial_ref in self.spatial_map:
+                self.spatial_map[spatial_ref] = []
+            if not exists:
+                self.spatial_map[spatial_ref].append(model_ref)
 
     def list_models(self, model_name, spatial_ref, temporal_ref):
         """List relevent models for a given spatial and temporal reference"""
-        if spatial_ref:
+        if isinstance(spatial_ref, str):
             candidates = [self.models[ref] for ref in self.spatial_map.get(spatial_ref) or []]
         else:
             candidates = self.models.values()
@@ -70,7 +64,7 @@ class LocalModelStore():
             iso_time = temporal_ref.isoformat()
             latest = {}
             for c in candidates:
-                key = c['model'] + ':' + c['linkRef']
+                key = c['model'] + ':' +str(c['spatialRefs']) #TODO: This might not make sense?
                 if key in latest:
                     if latest[key]['time'] < c['time'] and c['time'] <= iso_time:
                         latest[key] = c
@@ -80,17 +74,3 @@ class LocalModelStore():
             candidates = latest.values()
 
         return list(candidates)
-
-    def get_model(self, model_ref):
-
-        # Load from memory
-        if model_ref in self.model_cache:
-            return self.model_cache[model_ref]
-
-        # Load from disk
-        model_metadata = self.models[model_ref]
-        with open(model_metadata['resourceUrl'], 'rb') as f:
-            model = joblib.load(f)
-            self.model_cache[model_ref] = model
-
-        return model
