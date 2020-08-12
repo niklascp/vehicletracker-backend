@@ -10,7 +10,11 @@ from vehicletracker.core import VehicleTrackerNode
 
 _LOGGER = logging.getLogger(__name__)
 
-class MssqlHistoryDataSource():
+class HistoryDataSource():
+    def dwell_time_from_to(self, params):
+        pass
+
+class MssqlHistoryDataSource(HistoryDataSource):
     """History data directly from MS SQL Data Warehouse"""
 
     def __init__(self):
@@ -102,6 +106,52 @@ class MssqlHistoryDataSource():
 
         return result
 
+    def dwell_time_from_to(self, params):
+        from_time = pd.to_datetime(params['fromTime'])
+        to_time = pd.to_datetime(params['toTime'])
+
+        sql = """
+        select
+            [time] = [p].[ObservedArrivalDateTime],
+            [stop_point_ref] = [p].[StopPointNumber],
+            [is_timing_point] = [p].[IsTimingPoint],
+            [delay] = datediff(second, [p].[PlannedArrivalDateTime], [p].[ObservedArrivalDateTime]),
+            [dwell_time] = datediff(second, [ObservedArrivalDateTime], [p].[ObservedDepartureDateTime])
+        from
+            [data].[RT_JourneyPoint] [p] (nolock)
+        where
+            [p].[OperatingDayDate] between dateadd(day, -1, '{0:}') and '{1:}'
+            and [p].[ObservedArrivalDateTime] between '{0:}' and '{1:}'
+            and [p].[ObservedArrivalDateTime] < [p].[ObservedDepartureDateTime]
+            and [p].[IsStopPoint] = 1
+        """.format(from_time, to_time)
+
+        if params.get('lineRef'):
+            sql += "    and [p].[LineNumber] = {:d}\n".format(int(params.get('lineRef')))
+        elif params.get('stopPointRef'):
+            sql += "    and [p].[StopPointNumber] = {:d}\n".format(int(params.get('stopPointRef')))
+            if params.get('lineRef'):
+                sql += "    and [p].[LineNumber] = {:d}\n".format(int(params.get('lineRef')))
+        else:
+            raise ValueError('Must provide lineRef and/or stopPointRef')
+
+        data = pd.read_sql_query(sql, self.engine)
+        stop_point_ref, stop_point_ref_labels = data['stop_point_ref'].astype(str).factorize(sort=True)
+        epoch = pd.Timestamp("1970-01-01")
+
+        result = {
+            'labels': {
+                'stopPointRef': stop_point_ref_labels.tolist()
+            },
+            'data': {
+                'time': ((data['time'] - epoch) // pd.Timedelta('1s')).tolist(),
+                'stopPointRef': stop_point_ref.tolist(),    
+                'delay': data['delay'].tolist(),
+                'isTimingPoint': data['is_timing_point'].tolist(),
+                'dwellTime': data['dwell_time'].tolist(),
+            } 
+        }
+        return result
 
 class FileHistoryDataSource():
     """Local travel time history loaded from CSV-files"""
