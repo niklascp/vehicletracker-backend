@@ -177,7 +177,8 @@ class VehicleTrackerNode:
             ATTR_NODE_NAME: self.name
         })
         await self.async_block_till_done()
-
+        await self.events.async_close()
+        
         # stage 2
         self.state = NodeState.not_running
         await self.async_block_till_done()
@@ -314,16 +315,21 @@ class EventBus:
         self._event_exchange = await self._channel.declare_exchange(EVENTS_EXCHANGE_NAME, ExchangeType.TOPIC)
         return True
 
+    async def async_close(self):
+        if self._connection:
+            await self._connection.close()
+
     async def _async_listen_queue(self, domain: str, queue : aio_pika.Queue) -> None:
         """Loop for listening on a specific queue""" 
-        async with queue.iterator() as queue_iter:
-            _LOGGER.info("Proccessing of queue '%s' is starting.", queue.name)
-            # Cancel consuming after __aexit__
-            async for message in queue_iter:
+        _LOGGER.info("Proccessing of queue '%s' is starting.", queue.name)
+        try:
+            async for message in queue:
                 async with message.process():
                     event_type = message.headers['event_type']
                     event_data = json.loads(message.body)
                     self.publish_local(event_type, event_data, domain)
+        except:
+            _LOGGER.info("Proccessing of queue '%s' has stopped.", queue.name)
 
     async def _async_remove_listener(self, domain : str, event_type : str, target : Callable):
         """Remove a listener of a specific event_type.
