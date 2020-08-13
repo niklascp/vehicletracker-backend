@@ -2,38 +2,38 @@
 Core components of Vehicle Tracker.
 """
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from async_timeout import timeout
-import functools
-import enum
-import logging
-import threading
-import json
-import uuid
-import os
-from time import monotonic
 import datetime as dt
-import pytz
-
-from typing import (
-    Optional,
-    Any,
-    Callable,
-    Coroutine,
-    List,
-    Dict,
-    TypeVar,
-)
+import enum
+import functools
+import json
+import logging
+import os
+import threading
+import uuid
+from time import monotonic
+from typing import (Any, Awaitable, Callable, Coroutine, Dict, Iterable, List,
+                    Optional, TypeVar)
 
 import aio_pika
+import pytz
 from aio_pika.exchange import ExchangeType
+from async_timeout import timeout
 
-from vehicletracker.const import (ATTR_EVENT_TYPE, ATTR_NODE_NAME, ATTR_NOW, EVENT_NODE_START, EVENT_NODE_STOP, EVENT_REPLY, EVENT_TIME_CHANGED, TIMEOUT_EVENT_START)
+from vehicletracker.const import (ATTR_EVENT_TYPE, ATTR_NODE_NAME, ATTR_NOW,
+                                  EVENT_NODE_START, EVENT_NODE_STOP,
+                                  EVENT_REPLY, EVENT_TIME_CHANGED,
+                                  TIMEOUT_EVENT_START, TIMEOUT_EVENT_STOP)
 from vehicletracker.helpers.json import DateTimeEncoder
 
 T = TypeVar("T")
 CALLABLE_T = TypeVar("CALLABLE_T", bound=Callable)
 CALLBACK_TYPE = Callable[[], None]
+
+# How long to wait to log tasks that are blocking
+BLOCK_LOG_TIMEOUT = 60
+
+# RabbitMQ Exchange for events
+EVENTS_EXCHANGE_NAME = 'vehicletracker-events'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,18 +45,6 @@ def callback(func: CALLABLE_T) -> CALLABLE_T:
 def is_callback(func: Callable[..., Any]) -> bool:
     """Check if function is safe to be called in the event loop."""
     return getattr(func, "_hass_callback", False) is True
-
-@callback
-def async_loop_exception_handler(_: Any, context: Dict) -> None:
-    """Handle all exception inside the core loop."""
-    kwargs = {}
-    exception = context.get("exception")
-    if exception:
-        kwargs["exc_info"] = (type(exception), exception, exception.__traceback__)
-
-    _LOGGER.error(  # type: ignore
-        "Error doing job: %s", context["message"], **kwargs
-    )
 
 class NodeState(enum.Enum):
     """Represent the current state of the node."""
@@ -73,19 +61,10 @@ class NodeState(enum.Enum):
 class VehicleTrackerNode:
     """Root node object of the Vehicle Tracker system."""
 
-    def __init__(self, config : Dict[str, Any], loop: Optional[asyncio.events.AbstractEventLoop] = None) -> None:
+    def __init__(self, config : Dict[str, Any]) -> None:
         """Initialize new Vehicle Tracker node object."""
         self.name = config.get('node', {}).get('name', None) or 'default'
-        self.loop: asyncio.events.AbstractEventLoop = (loop or asyncio.get_event_loop())
-
-        executor_opts: Dict[str, Any] = {
-            "max_workers": None,
-            "thread_name_prefix": "SyncWorker",
-        }
-
-        self.executor = ThreadPoolExecutor(**executor_opts)
-        self.loop.set_default_executor(self.executor)
-        self.loop.set_exception_handler(async_loop_exception_handler)
+        self.loop = asyncio.get_running_loop()
         self._pending_tasks: list = []
         self._track_task = True
         self.events = EventBus(self)
@@ -113,7 +92,6 @@ class VehicleTrackerNode:
             from vehicletracker.helpers.signal import async_register_signal_handling
             async_register_signal_handling(self)
 
-        await asyncio.sleep(0)
         await self._stopped.wait()
         return self.exit_code
 
@@ -154,7 +132,7 @@ class VehicleTrackerNode:
     async def async_stop(self, exit_code: int = 0, *, force: bool = False) -> None:
         """Stop Vehicle Tracker Node and shuts down all threads.
         The "force" flag commands async_stop to proceed regardless of
-        Home Assistan't current state. You should not set this flag
+        the nodes current state. You should not set this flag
         unless you're testing.
         This method is a coroutine.
         """
@@ -176,13 +154,20 @@ class VehicleTrackerNode:
         await self.events.async_publish(EVENT_NODE_STOP, {
             ATTR_NODE_NAME: self.name
         })
-        await self.async_block_till_done()
-        await self.events.async_close()
-        
+        try:
+            async with timeout(120):
+                await self.async_block_till_done()
+        except asyncio.TimeoutError:
+            _LOGGER.warning(
+                "Timed out waiting for shutdown stage 1 to complete, the shutdown will continue"
+            )
+
         # stage 2
         self.state = NodeState.not_running
-        await self.async_block_till_done()
-        self.executor.shutdown()
+        await self.events.async_close()
+
+        if hasattr(self.loop, "shutdown_default_executor"):
+            await self.loop.shutdown_default_executor()  # type: ignore
 
         self.exit_code = exit_code
 
@@ -192,21 +177,50 @@ class VehicleTrackerNode:
             self.loop.stop()
 
     def block_till_done(self) -> None:
-        """Block till all pending work is done."""
-        asyncio.ensure_future(self.async_block_till_done(), loop = self.loop).result()
+        """Block until all pending work is done."""
+        asyncio.run_coroutine_threadsafe(
+            self.async_block_till_done(), self.loop
+        ).result()
 
     async def async_block_till_done(self) -> None:
-        """Block till all pending work is done."""
+        """Block until all pending work is done."""
         # To flush out any call_soon_threadsafe
         await asyncio.sleep(0)
+        start_time: Optional[float] = None
 
         while self._pending_tasks:
             pending = [task for task in self._pending_tasks if not task.done()]
             self._pending_tasks.clear()
             if pending:
-                await asyncio.wait(pending)
+                await self._await_and_log_pending(pending)
+
+                if start_time is None:
+                    # Avoid calling monotonic() until we know
+                    # we may need to start logging blocked tasks.
+                    start_time = 0
+                elif start_time == 0:
+                    # If we have waited twice then we set the start
+                    # time
+                    start_time = monotonic()
+                elif monotonic() - start_time > BLOCK_LOG_TIMEOUT:
+                    # We have waited at least three loops and new tasks
+                    # continue to block. At this point we start
+                    # logging all waiting tasks.
+                    for task in pending:
+                        _LOGGER.debug("Waiting for task: %s", task)
             else:
                 await asyncio.sleep(0)
+
+    async def _await_and_log_pending(self, pending: Iterable[Awaitable[Any]]) -> None:
+        """Await and log tasks that take a long time."""
+        wait_time = 0
+        while pending:
+            _, pending = await asyncio.wait(pending, timeout=BLOCK_LOG_TIMEOUT)
+            if not pending:
+                return
+            wait_time += BLOCK_LOG_TIMEOUT
+            for task in pending:
+                _LOGGER.debug("Waited %s seconds for task: %s", wait_time, task)
 
     @callback
     def async_run_job(self, target: Callable[..., None], *args: Any) -> None:
@@ -289,8 +303,6 @@ class VehicleTrackerNode:
         """Stop track tasks so you can't wait for all tasks to be done."""
         self._track_task = False
 
-EVENTS_EXCHANGE_NAME = 'vehicletracker-events'
-
 class EventBus:
     """Allow publication of and listening for events over RabbitMQ."""
 
@@ -317,6 +329,7 @@ class EventBus:
 
     async def async_close(self):
         if self._connection:
+            _LOGGER.info("Closing connection to RabbitMQ ...")
             await self._connection.close()
 
     async def _async_listen_queue(self, domain: str, queue : aio_pika.Queue) -> None:
@@ -363,6 +376,18 @@ class EventBus:
             target
         )
 
+    def listen_domain(
+        self,
+        domain : str,
+        event_type : str,
+        target: Callable) -> Callable[[], None]:
+        """
+        Listen for the given event_type on the domain
+        """
+        return asyncio.run_coroutine_threadsafe(
+            self.async_listen_domain(domain, event_type, target), 
+            loop = self._node.loop).result()
+
     async def async_listen(
         self,
         event_type : str,
@@ -377,24 +402,17 @@ class EventBus:
             target
         )
 
-    def listen_domain(
-        self,
-        domain : str,
-        event_type : str,
-        target: Callable) -> Callable[[], None]:
-        """
-        Listen for the given event_type on the domain
-        """
-        return asyncio.run_coroutine_threadsafe(
-            self.async_listen_domain(domain, event_type, target), 
-            loop = self._node.loop).result()
-
     async def async_listen_domain(
         self,
         domain : str,
         event_type : str,
         target: Callable[..., Any]) -> Callable[[], None]:
         """Listen for the given event_type on the domain"""
+
+        async def _consume(message : aio_pika.Message):
+            event_type = message.headers['event_type']
+            event_data = json.loads(message.body)
+            self.publish_local(event_type, event_data, domain)
 
         if domain:
             _LOGGER.info("Listening for %s (domain: %s).", event_type, domain)
@@ -411,8 +429,9 @@ class EventBus:
             ) # type: aio_pika.Queue
             # Start consume from the domain queue
             self._domain_queues[domain] = queue
+            self._node.async_create_task(queue.consume(_consume))
             self._listeners[domain] = {}
-            self._node.loop.create_task(self._async_listen_queue(domain, queue))
+            #self._node.loop.create_task(self._async_listen_queue(domain, queue))
 
         if event_type in self._listeners[domain]:
             self._listeners[domain][event_type].append(target)

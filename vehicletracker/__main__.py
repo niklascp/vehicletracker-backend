@@ -1,45 +1,79 @@
 """Start Vehicle Tracker."""
 
-import sys
-import os
-import subprocess
-
-from typing import List, Dict, Any, TYPE_CHECKING
-
 import argparse
 import asyncio
+import logging
+import os
+import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Any, Dict, List
 
-from vehicletracker.const import __version__, RESTART_EXIT_CODE
+from vehicletracker.const import RESTART_EXIT_CODE, __version__
+from vehicletracker.core import callback
 from vehicletracker.helpers.config import load_config
 
-def set_loop() -> None:
-    """Attempt to use uvloop."""    
-    from asyncio.events import BaseDefaultEventLoopPolicy
+class EventLoopPolicy(asyncio.DefaultEventLoopPolicy):  # type: ignore, pylint: disable=invalid-name
+    """Event loop policy for Home Assistant."""
 
-    policy = None
+    def __init__(self, debug: bool) -> None:
+        """Init the event loop policy."""
+        super().__init__()
+        self.debug = debug
 
-    if sys.platform == "win32":
-        if hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
-            # pylint: disable=no-member
-            policy = asyncio.WindowsProactorEventLoopPolicy()
-        else:
+    @property
+    def loop_name(self) -> str:
+        """Return name of the loop."""
+        return self._loop_factory.__name__  # type: ignore
 
-            class ProactorPolicy(BaseDefaultEventLoopPolicy):
-                """Event loop policy to create proactor loops."""
+    def new_event_loop(self) -> asyncio.AbstractEventLoop:
+        """Get the event loop."""
+        loop: asyncio.AbstractEventLoop = super().new_event_loop()
+        loop.set_exception_handler(_async_loop_exception_handler)
+        if self.debug:
+            loop.set_debug(True)
 
-                _loop_factory = asyncio.ProactorEventLoop
+        executor = ThreadPoolExecutor(thread_name_prefix="SyncWorker")
+        loop.set_default_executor(executor)
 
-            policy = ProactorPolicy()
-    else:
-        try:
-            import uvloop
-        except ImportError:
-            pass
-        else:
-            policy = uvloop.EventLoopPolicy()
+        # Python 3.9+
+        if hasattr(loop, "shutdown_default_executor"):
+            return loop
 
-    if policy is not None:
-        asyncio.set_event_loop_policy(policy)
+        # Copied from Python 3.9 source
+        def _do_shutdown(future: asyncio.Future) -> None:
+            try:
+                executor.shutdown(wait=True)
+                loop.call_soon_threadsafe(future.set_result, None)
+            except Exception as ex:  # pylint: disable=broad-except
+                loop.call_soon_threadsafe(future.set_exception, ex)
+
+        async def shutdown_default_executor() -> None:
+            """Schedule the shutdown of the default executor."""
+            future = loop.create_future()
+            thread = threading.Thread(target=_do_shutdown, args=(future,))
+            thread.start()
+            try:
+                await future
+            finally:
+                thread.join()
+
+        setattr(loop, "shutdown_default_executor", shutdown_default_executor)
+
+        return loop
+
+@callback
+def _async_loop_exception_handler(_: Any, context: Dict) -> None:
+    """Handle all exception inside the core loop."""
+    kwargs = {}
+    exception = context.get("exception")
+    if exception:
+        kwargs["exc_info"] = (type(exception), exception, exception.__traceback__)
+
+    logging.getLogger(__package__).error(
+        "Error doing job: %s", context["message"], **kwargs  # type: ignore
+    )
 
 def get_arguments() -> argparse.Namespace:
     """Get parsed passed in arguments."""
@@ -128,8 +162,6 @@ async def setup_and_run_node(config_file) -> int:
 
 def main() -> int:
     """Start Vehicle Tracker."""
-    set_loop()
-
     # Run a simple daemon runner process on Windows to handle restarts
     if os.name == "nt" and "--runner" not in sys.argv:
         nt_args = cmdline() + ["--runner"]
@@ -146,14 +178,7 @@ def main() -> int:
     args = get_arguments()
     config_file = os.path.join(os.getcwd(), args.config)
 
-    # Daemon functions
-    #if args.pid_file:
-    #    check_pid(args.pid_file)
-    #if args.daemon:
-    #    daemonize()
-    #if args.pid_file:
-    #    write_pid(args.pid_file)
-
+    asyncio.set_event_loop_policy(EventLoopPolicy(False))
     exit_code = asyncio.run(setup_and_run_node(config_file))
     #if exit_code == RESTART_EXIT_CODE and not args.runner:
     #    try_to_restart()
