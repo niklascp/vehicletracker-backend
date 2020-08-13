@@ -429,7 +429,7 @@ class EventBus:
             ) # type: aio_pika.Queue
             # Start consume from the domain queue
             self._domain_queues[domain] = queue
-            self._node.async_create_task(queue.consume(_consume))
+            self._node.async_create_task(queue.consume(_consume, no_ack=True))
             self._listeners[domain] = {}
             #self._node.loop.create_task(self._async_listen_queue(domain, queue))
 
