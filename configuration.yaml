@@ -8,6 +8,10 @@ model_registry:
   models:
     - name: NnMultiStopDwell
       class: vehicletracker.models.dwell_time.NnMultiStopDwell
+    - name: WeeklyHistoricalAverageTravelTime
+      class: vehicletracker.models.WeeklyHistoricalAverageTravelTime.WeeklyHistoricalAverageTravelTime
+    - name: NnMultiLinkTravel
+      class: vehicletracker.models.NnMultiLinkTravel.NnMultiLinkTravel
 
 predictor:
 
@@ -28,4 +32,4 @@ logger:
   logs:
     # log level for core
     vehicletracker.core: warn
-    vehicletracker.components.predictor: error
+    vehicletracker.components.predictor: warn
