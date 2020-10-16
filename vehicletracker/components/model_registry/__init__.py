@@ -2,7 +2,7 @@
 
 from datetime import datetime
 import logging
-from typing import (Any, Dict)
+from typing import (Any, Type, Dict)
 
 import importlib
 
@@ -40,7 +40,7 @@ class ModelRegitry():
     def __init__(self, node : VehicleTrackerNode, config : Dict[str, Any]):
         self.node = node
         self.model_store = LocalModelStore(MODEL_CACHE_PATH)
-        self.model_classes = {}
+        self.model_classes : Dict[str, Type] = {}
         for model_config in config[ATTR_MODELS]:
             # Initialie client
             model_module_name, model_class_name = model_config[ATTR_CLASS].rsplit(".", 1)

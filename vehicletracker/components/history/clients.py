@@ -7,10 +7,15 @@ import numpy as np
 import pandas as pd
 
 from vehicletracker.core import VehicleTrackerNode
+from vehicletracker.helpers.spatial_reference import parse_spatial_ref
+from vehicletracker.helpers.datetime import parse_datetime
 
 _LOGGER = logging.getLogger(__name__)
 
 class HistoryDataSource():
+    def travel_time_n_preceding_normal_days(self, params):
+        pass
+
     def dwell_time_from_to(self, params):
         pass
 
@@ -46,6 +51,7 @@ class MssqlHistoryDataSource(HistoryDataSource):
 
         return result
 
+    # Thease are legacy methods that could be removed soon
     def link_travel_time_from_to(self, params):
         """Get link travel times"""
 
@@ -100,6 +106,66 @@ class MssqlHistoryDataSource(HistoryDataSource):
             'time': np.diff(np.hstack((0, data['time'].astype(np.int64) // 10**9))).tolist(),
             'link_travel_time': data['link_travel_time'].values.tolist(),
             'day_type': data['day_type'].values.tolist()
+        }
+
+        _LOGGER.debug(f"returning {len(data)} results")
+
+        return result
+
+    def travel_time_from_to(self, params):
+        spatial_ref = parse_spatial_ref(params['spatialRef'])
+        from_time = parse_datetime(params['fromTime'])
+        to_time = parse_datetime(params['toTime'])
+
+        # TODO: Handle more complex spatial_ref
+        link_ref = next(iter(spatial_ref.link_refs or []), None)
+        data_concat = []
+        for line_ref in spatial_ref.line_refs:
+            data = pd.read_sql_query(
+                'exec api.RT_VehicleTracker_LinkTavelTime @fromTime = ?, @toTime = ?, @lineRef = ?, @linkRef = ?',
+                self.engine,
+                params=[from_time, to_time, line_ref, link_ref])
+            data_concat.append(data)
+        
+        data = pd.concat(data_concat, axis=0)
+        link_ref, link_ref_labels = data['link_ref'].astype(str).factorize(sort=True)
+        result = {
+            'labels': {
+                'linkRef': link_ref_labels.tolist()
+            },
+            'data': {
+                'time': (data['time'].astype(np.int64) // 10**9).tolist(),
+                'linkRef': link_ref.tolist(),
+                'travelTime': data['link_travel_time'].values.tolist()
+            }
+        }
+
+        _LOGGER.debug(f"returning {len(data)} results")
+
+        return result        
+
+    def travel_time_n_preceding_normal_days(self, params):
+        spatial_ref = parse_spatial_ref(params['spatialRef'])
+        time = parse_datetime(params['time'])
+        n_days = int(params['nDays'])
+
+        # TODO: Handle more complex spatial_ref
+        data = pd.read_sql_query(
+            'exec api.RT_VehicleTracker_LinkTavelTime_NPrecedingNormalDays @nDays = ?, @time = ?, @lineRef = ?, @linkRef = ?',
+            self.engine,
+            params=[n_days, time, next(iter(spatial_ref.line_refs or []), None), next(iter(spatial_ref.link_refs or []), None)])
+
+        link_ref, link_ref_labels = data['link_ref'].astype(str).factorize(sort=True)
+
+        result = {
+            'labels': {
+                'linkRef': link_ref_labels.tolist()
+            },
+            'data': {
+                'time': (data['time'].astype(np.int64) // 10**9).tolist(),
+                'linkRef': link_ref.tolist(),
+                'travelTime': data['link_travel_time'].values.tolist()
+            }
         }
 
         _LOGGER.debug(f"returning {len(data)} results")

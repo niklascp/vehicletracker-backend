@@ -38,4 +38,7 @@ async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):
 
     await node.services.async_register(DOMAIN, 'dwell_time_from_to', client.dwell_time_from_to)
 
+    await node.services.async_register(DOMAIN, 'travel_time_n_preceding_normal_days', client.travel_time_n_preceding_normal_days)
+    await node.services.async_register(DOMAIN, 'travel_time_from_to', client.travel_time_from_to)
+
     return True

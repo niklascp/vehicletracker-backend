@@ -1,4 +1,4 @@
-"""Vehicle Tracker History Component"""
+"""Vehicle Tracker Monitor Component"""
 
 import logging
 from datetime import datetime, timedelta
@@ -63,14 +63,16 @@ class Monitor():
         valid_from_utc = event_data['vehicleJourneyAssignment']['validFromUtc']
         invalid_from_utc = event_data['vehicleJourneyAssignment']['invalidFromUtc']
 
-        if journey_ref in self.journey_map:
-            journey = self.journey_map[journey_ref]
-            journey['vehicleRef'] = vehicle_ref
-            journey['vehicleValidFromUtc'] = valid_from_utc
-            journey['vehicleValidToUtc'] = invalid_from_utc
+        if not journey_ref in self.journey_map:
+            return
 
-            if invalid_from_utc and journey['linkIndex'] >= len(journey['links']) - 2:
-                journey['state'] = 'Completed'
+        journey = self.journey_map[journey_ref]
+        journey['vehicleRef'] = vehicle_ref
+        journey['vehicleValidFromUtc'] = valid_from_utc
+        journey['vehicleValidToUtc'] = invalid_from_utc
+
+        if invalid_from_utc and journey.get('linkIndex') and journey.get('linkIndex') >= len(journey['links']) - 2:
+            journey['state'] = 'Completed'
 
     def link_completed(self, event_type, event_data):
         """Event handler for 'linkCompleted'. Collects true link time for error calculation."""
@@ -78,39 +80,46 @@ class Monitor():
         journey_ref = event_data['journeyRef']
         sequence_number = event_data['sequenceNumber']
         link_ref = event_data['linkRef']
-        if journey_ref in self.journey_map:
-            journey = self.journey_map[journey_ref]
-            journey['vehicleRef'] = event_data['vehicleRef']
-            try:
-                ix, link = next((ix, ln) for (ix, ln) in enumerate(journey['links']) if ln['sequenceNumber'] == sequence_number)
-                if link['linkRef'] != link_ref:
-                    _LOGGER.warning(
-                        'Link refs dot not match for journey: %s, sequence_number: %s. '
-                        'Expected %s, found %s.',
-                        journey_ref, sequence_number, link_ref, link['linkRef'])
-                    return
-                link['vehicleRef'] = event_data['vehicleRef']
-                link['observedTime'] = event_data['travelTimeSeconds']
+        journey = self.journey_map.get(journey_ref)
+        
+        if journey is None:
+            return    
 
-                if link.get('predictions'):
-                    for pred in link['predictions']:
-                        pred['error'] = event_data['travelTimeSeconds'] - pred['predicted']                        
+        journey['vehicleRef'] = event_data['vehicleRef']
+        index = journey['sequenceToIndex'].get(str(sequence_number)) 
 
-                if link.get('predictedTime'):
-                    link['error'] = event_data['travelTimeSeconds'] - link['predictedTime']
-                    link['errorAcc'] = journey.get('linkErrorAcc', 0) + link['error']
-                    journey['linkErrorAcc'] = journey.get('linkErrorAcc', 0) + link['error']
+        # We will recieve link_completed for virtual journey points, just ignore them.
+        if index is None or index >= len(journey['stops']):
+            _LOGGER.warning(
+                'Could not find link for journey: %s, sequence_number: %s. [link_completed]',
+                journey_ref, sequence_number)  
+            return
+    
+        link = journey['links'][index - 1]
 
-                # Progress the link one ahead
-                if ix + 1 < len(journey['links']):
-                    journey['linkIndex'] = ix + 1
-                journey['currentDistance'] = link['totalDistance']
-            except StopIteration:
-                _LOGGER.warning(
-                    'Could not find link for journey: %s, sequence_number: %s.',
-                    journey_ref, sequence_number)    
+        if link_ref != link['linkRef']:
+            _LOGGER.warning(
+                'Link refs dot not match for journey: %s, sequence_number: %s. '
+                'Expected %s, found %s (index %s).',
+                journey_ref, sequence_number, link_ref, link['linkRef'], index)
+            return  
+       
+        link['vehicleRef'] = event_data['vehicleRef']
+        link['observedTime'] = event_data['travelTimeSeconds']
 
-    def updated_departure(self, event_type, event_data):
+        if link.get('predictions') is not None:
+            for pred in link['predictions']:
+                pred['error'] = event_data['travelTimeSeconds'] - pred['predicted']                        
+
+        if link.get('predictedTime') is not None:
+            link['error'] = event_data['travelTimeSeconds'] - link['predictedTime']
+            link['errorAcc'] = journey.get('linkErrorAcc', 0) + link['error']
+            journey['linkErrorAcc'] = journey.get('linkErrorAcc', 0) + link['error']
+
+        journey['linkIndex'] = index
+        journey['currentDistance'] = link['totalDistance']
+
+    async def updated_departure(self, event_type, event_data):
         journey_ref = event_data['journeyRef']
         sequence_number = event_data['sequenceNumber']
         departure_time = parse_datetime(event_data['observedUtc']) if event_type == 'departure' else event_data['estimatedUtc']
@@ -119,16 +128,31 @@ class Monitor():
         if journey is None:
             return    
 
-        try:
-            link = next(ln for ln in journey['links'] if ln['sequenceNumber'] >= sequence_number)
-            stop = next(sp for sp in journey['stops'] if sp['sequenceNumber'] >= sequence_number)
-        except StopIteration:
-            _LOGGER.warning(
-                'Could not find link/stop for journey: %s, sequence_number: %s.',
-                journey_ref, sequence_number) 
-            return 
+        index = journey['sequenceToIndex'].get(str(sequence_number))
+        
+        # We will recieve departure event for virtual journey points, just ignore them.
+        if index is None or index >= len(journey['stops']):
+            return
 
-        link_predictions = self.node.services.call('link_predict', { 'linkRef': link['linkRef'], 'time': as_local(departure_time) }) 
+        stop = journey['stops'][index]
+
+        # Actual departure
+        if event_type == 'departure':
+            journey['state'] = 'Run'        
+            stop['observedDepartureUtc'] = departure_time
+            journey['delay'] = (departure_time - parse_datetime(stop['plannedDepartureUtc'])).total_seconds() 
+
+            if stop.get('observedArrivalUtc'):
+                stop['observedDwellTime'] = (departure_time - parse_datetime(stop['observedArrivalUtc'])).total_seconds()
+                if stop.get('predictedDwellTime'):
+                    stop['error'] = stop['observedDwellTime'] - stop['predictedDwellTime']
+
+        # This is the final stop, no need for more
+        if index + 1 >= len(journey['stops']):
+            return
+
+        link = journey['links'][index]
+        link_predictions = await self.node.services.async_call('link_predict', { 'linkRef': link['linkRef'], 'time': as_local(departure_time) }) 
 
         if len(link_predictions) == 0:
             # Fallback to timetable
@@ -136,23 +160,17 @@ class Monitor():
         else:
             predicted = link_predictions[0]['predicted'] #TODO: Just dont take the first!
 
-        # Actual departure
-        if event_type == 'departure':
-            journey['state'] = 'Run'        
-            stop['observedDepartureUtc'] = departure_time
-            journey['delay'] = (departure_time - parse_datetime(stop['plannedDepartureUtc'])).total_seconds()
-
         link['predictedTime'] = predicted
-        link['predictedUpdated'] = utcnow()
+        link['predictedUpdated'] = utcnow().isoformat()
         link['predictions'] = link_predictions
 
         self.node.events.publish_local('estimated_arrival', {
             'journeyRef': journey_ref,
-            'sequenceNumber': sequence_number + 1, #TODO: Not always correct!
+            'sequenceNumber': link['sequenceNumber'],
             'estimatedUtc': departure_time + timedelta(seconds=predicted)
         })
 
-    def updated_arrival(self, event_type, event_data): 
+    async def updated_arrival(self, event_type, event_data): 
         """Event handler for 'arrival' and 'estimated_arrival'. Predicts dwell time and cascade downstream via estimated_departure event."""
         
         journey_ref = event_data['journeyRef']
@@ -163,38 +181,51 @@ class Monitor():
         if journey is None:
             return
 
-        if event_type == 'arrival' and event_data['state'] == 'ARRIVED':
-            journey['state'] = 'Dwell'
+        index = journey['sequenceToIndex'].get(str(sequence_number))
+        
+        # We will recieve arrival event for virtual journey points, just ignore them.
+        if index is None or index >= len(journey['stops']):
+            return    
 
-        try:
-            ix, stop = next((ix, ln) for (ix, ln) in enumerate(journey['stops']) if ln['sequenceNumber'] >= sequence_number)
+        stop = journey['stops'][index]
 
+        if event_type == 'arrival':
+            stop['observedArrivalUtc'] = arrival_time.isoformat()
+            #ignore passed arrivals, update will cascade from the corresponding departure.
+            if event_data['state'] == 'PASSED':
+                return
+            elif event_data['state'] == 'ARRIVED':
+                journey['state'] = 'Dwell'
+        else:
+            stop['predictedArrivalUtc'] = arrival_time.isoformat()
+
+        # This is the final stop, no need for more
+        if index + 1 >= len(journey['stops']):
+            return
+
+        delay = (arrival_time - parse_datetime(stop['plannedArrivalUtc'])).total_seconds()
+        stop_predictions = await self.node.services.async_call('stop_predict', {
+                'stopPointRef': stop['stopPointRef'], 
+                'time': as_local(arrival_time), 
+                'delay': delay 
+            })
+
+        if len(stop_predictions) == 0:
+            # Fallback to timetable
             predicted = 0
+        else:
+            predicted = stop_predictions[0]['predicted'] #TODO: Just dont take the first!
+        
+        predictedDepartureUtc = arrival_time + timedelta(seconds=predicted)
+        stop['predictedDwellTime'] = predicted
+        stop['predictedDepartureUtc'] = predictedDepartureUtc.isoformat()
+        stop['predictedUpdated'] = utcnow().isoformat()
 
-            if event_type == 'arrival':
-                stop['observedArrivalUtc'] = arrival_time
-                #ignore passed arrivals, update will cascade from the corresponding departure.
-                if event_data['state'] == 'PASSED':
-                    return
-            else:
-                stop['predictedArrivalUtc'] = arrival_time
-            
-            stop['predictedDwellTime'] = predicted
-            stop['predictedDepartureUtc'] = arrival_time + timedelta(seconds=predicted)
-            stop['predictedUpdated'] = utcnow()
-
-            if ix < len(journey['stops']) - 1:
-                # This is not the last stop: Emit estimated departure
-                self.node.events.publish_local('estimated_departure', {
-                    'journeyRef': journey_ref,
-                    'sequenceNumber': sequence_number,
-                    'estimatedUtc': arrival_time + timedelta(seconds=predicted)
-                })
-
-        except StopIteration:
-            _LOGGER.warning(
-                'Could not find link for journey: %s, sequence_number: %s.',
-                journey_ref, sequence_number)    
+        self.node.events.publish_local('estimated_departure', {
+            'journeyRef': journey_ref,
+            'sequenceNumber': sequence_number,
+            'estimatedUtc': predictedDepartureUtc
+        })
 
     # Helper API methods
 
@@ -277,6 +308,9 @@ class Monitor():
             if not journey['journeyRef'] in self.journey_map:
                 journey['stops'] = self.node.services.call('load_journey_stops', { 'journeyRef': journey['journeyRef'] })
                 journey['links'] = self.node.services.call('load_journey_links', { 'journeyRef': journey['journeyRef'] })
+
+                journey['sequenceToIndex'] = {str(item['sequenceNumber']): index for index, item in enumerate(journey['stops'])}
+
                 journey['added'] = utc_time
                 journey['totalDistance'] = journey['links'][-1]['totalDistance']                
                 self.journey_map[journey['journeyRef']] = journey

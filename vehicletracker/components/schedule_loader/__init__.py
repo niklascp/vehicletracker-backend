@@ -102,7 +102,7 @@ select
     [origin] = jp.[JourneyPatternStartStopPointName],
     [destination] = jp.[JourneyPatternEndStopPointName]
 from
-    [data].[RT_Journey] j
+    [data].[RT_Journey] j (nolock)
     join [dim].[JourneyPattern] jp on jp.[JourneyPatternId] = j.[JourneyPatternId] and jp.[IsCurrent] = 1
 where
     --j.[LineNumber] in (10, 15, 150, 375)
@@ -125,10 +125,10 @@ order by
 select 
     [sequenceNumber] = [SequenceNumber],
     [stopPointRef] = cast(p.[StopPointNumber] as nvarchar(20)),
-    [plannedArrivalUtc] = p.[PlannedArrivalDateTime] at time zone 'Central European Standard Time' at time zone 'UTC',
-    [plannedDepartureUtc] = p.[PlannedDepartureDateTime] at time zone 'Central European Standard Time' at time zone 'UTC'
+    [plannedArrivalUtc] = format(p.[PlannedArrivalDateTime] at time zone 'Central European Standard Time' at time zone 'UTC', 'yyyy-MM-ddTHH:mm:ssZ'),
+    [plannedDepartureUtc] = format(p.[PlannedDepartureDateTime] at time zone 'Central European Standard Time' at time zone 'UTC', 'yyyy-MM-ddTHH:mm:ssZ')
 from
-    [data].[RT_JourneyPoint] p
+    [data].[RT_JourneyPoint] p (nolock)
 where
     p.[JourneyRef] = ?
     and p.IsStopPoint = 1
@@ -147,7 +147,7 @@ select
 from
 (
     select 
-        [sequenceNumber] = [SequenceNumber] - 1,
+        [sequenceNumber] = [SequenceNumber],
         [linkRef] = concat(lag(p.[StopPointNumber]) over (order by p.[SequenceNumber]), ':', p.[StopPointNumber]),
         [plannedTime] = datediff(second, lag(p.[PlannedDepartureDateTime]) over (order by p.[SequenceNumber]), p.[PlannedArrivalDateTime]),
         [totalDistance] = p.[PlannedJourneyDistanceMeters]
@@ -158,7 +158,7 @@ from
         and p.IsStopPoint = 1
 ) p
 where
-    p.[SequenceNumber] > 0
+    p.[SequenceNumber] > 1
 order by
     p.[SequenceNumber]
             """, journey_ref).fetchall()
