@@ -1,24 +1,33 @@
 import logging
+from datetime import datetime
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
-
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Input, Embedding, Dense, Concatenate, Reshape
+from tensorflow.keras.layers import (Concatenate, Dense, Embedding, Input,
+                                     Reshape)
+
+from vehicletracker.helpers.spatial_reference import (SpatialRef,
+                                                      parse_spatial_ref)
+from vehicletracker.models import BaseModel
 
 _LOGGER = logging.getLogger(__name__)
 
-class DwellTimeModel:
+class DwellTimeModel(BaseModel):
     def __init__(self, node):
         self.node = node
+
+    def model_type(self) -> str:
+        return 'Dwell'
 
     def dwell_time_from_to(self, from_time, to_time, line_ref = None, stop_point_ref = None):
         data = self.node.services.call('dwell_time_from_to', {
             'fromTime': from_time,
             'toTime': to_time,
-            'lineRef': line_ref
+            'lineRef': line_ref[0]
         })
         if 'error' in data:
             raise ValueError(data['error'])
@@ -74,15 +83,13 @@ class NnMultiStopDwell(DwellTimeModel):
         
         self.history = self.keras_model.fit([x_stop_point, x_day_time, x_delay], [y_dwell], batch_size=100, epochs=50, validation_split = .2, verbose=verbose)    
     
-    def train(self, params):        
-        # Get dwell train data
-        model_parameters = params['parameters'] or {}
-        fromTime = str(pd.to_datetime(params['time']) - pd.DateOffset(days = model_parameters.get('nDays', 1)))
-        data_train, labels_train = self.dwell_time_from_to(fromTime, params['time'], model_parameters.get('lineRef'), model_parameters.get('stopPointRef'))
+    def train(self, time : datetime, spatial_ref : SpatialRef, parameters : Dict[str, Any]) -> Dict[str, Any]:
+
+        fromTime = (pd.to_datetime(time) - pd.DateOffset(days = parameters.get('nDays', 1))).to_pydatetime()
+        data_train, labels_train = self.dwell_time_from_to(fromTime, time, spatial_ref.line_refs, spatial_ref.stop_point_refs)
         # Fit the model
-        self.fit(data_train, labels_train, params)
+        self.fit(data_train, labels_train, parameters)
         return {
-            'type': 'dwell',
             'spatialRefs': self.stop_point_ref.tolist(),
             'trainSamples': len(data_train['time']),
             'history': self.history.history
@@ -95,6 +102,7 @@ class NnMultiStopDwell(DwellTimeModel):
         _LOGGER.info("Restoring model '%s'...", metadata['ref'])
         # model_store.download_to_cache()
         self.stop_point_ref = np.array(metadata['spatialRefs'])
+        # Todo use semaphore - kares unly support one model loading at a time! This will be called from the ThreadPool!
         self.keras_model = keras.models.load_model(metadata['resourceUrl'])
 
     def predict(self, predict_params):
@@ -103,7 +111,7 @@ class NnMultiStopDwell(DwellTimeModel):
             x_stop_point = np.argwhere(self.stop_point_ref == predict_params['stopPointRef']).flatten()
             x_time = self.dow_from_time([predict_params['time']])
             x_delay = np.array([predict_params['delay']])
-            return self.keras_model.predict([x_stop_point, x_time, x_delay]).flatten()
+            return self.keras_model([x_stop_point, x_time, x_delay], training=False).numpy().flatten()
         # Batch prediction
         elif 'time' in predict_params and isinstance(predict_params['time'], list):
             x_stop_point = np.searchsorted(self.stop_point_ref, predict_params['stopPointRef'])

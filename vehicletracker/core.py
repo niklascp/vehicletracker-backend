@@ -510,8 +510,15 @@ class ServiceBus:
     def _async_handle_reply(self, event_type, event_data):
         correlation_id = event_data['correlationId']
         result = event_data['result']
-        self._results[correlation_id] = result
-        self._wait_events[correlation_id].set()
+        if correlation_id in self._wait_events:
+            try:
+                self._results[correlation_id] = result
+                self._wait_events[correlation_id].set()
+            except KeyError:
+                self._results.pop(correlation_id, None)
+                pass
+        else:
+            logging.debug('Recived late reply (correlation_id: %s)', correlation_id)
 
     def register(
         self,

@@ -102,11 +102,12 @@ select
     [origin] = jp.[JourneyPatternStartStopPointName],
     [destination] = jp.[JourneyPatternEndStopPointName]
 from
-    [data].[RT_Journey] j
+    [data].[RT_Journey] j (nolock)
     join [dim].[JourneyPattern] jp on jp.[JourneyPatternId] = j.[JourneyPatternId] and jp.[IsCurrent] = 1
 where
-    --j.[LineNumber] in (10, 15, 150, 375)
-    j.[LineNumber] in (10, 375)
+    --j.[LineNumber] in (1, 2, 4, 5, 6, 7, 9, 10, 15, 150, 375)
+    j.[LineNumber] in (10, 15, 150, 375) and
+    j.[JourneyNumber] < 1000
     and getdate() between dateadd(minute, -15, [PlannedStartDateTime]) and [PlannedEndDateTime]
 order by
     [PlannedStartDateTime]
@@ -119,16 +120,20 @@ order by
 
     def load_journey_stops(self, service_data):
         """Service handler for 'load_journey_stops'. Load stops for a given journey."""
+        
         journey_ref = service_data['journeyRef']
+
+        _LOGGER.debug("Fetching stops for journey ref '%s'", journey_ref)
+
         data = self.engine.execute(
             """
 select 
     [sequenceNumber] = [SequenceNumber],
     [stopPointRef] = cast(p.[StopPointNumber] as nvarchar(20)),
-    [plannedArrivalUtc] = p.[PlannedArrivalDateTime] at time zone 'Central European Standard Time' at time zone 'UTC',
-    [plannedDepartureUtc] = p.[PlannedDepartureDateTime] at time zone 'Central European Standard Time' at time zone 'UTC'
+    [plannedArrivalUtc] = format(p.[PlannedArrivalDateTime] at time zone 'Central European Standard Time' at time zone 'UTC', 'yyyy-MM-ddTHH:mm:ssZ'),
+    [plannedDepartureUtc] = format(p.[PlannedDepartureDateTime] at time zone 'Central European Standard Time' at time zone 'UTC', 'yyyy-MM-ddTHH:mm:ssZ')
 from
-    [data].[RT_JourneyPoint] p
+    [data].[RT_JourneyPoint] p (nolock)
 where
     p.[JourneyRef] = ?
     and p.IsStopPoint = 1
@@ -139,7 +144,11 @@ where
 
     def load_journey_links(self, service_data):
         """Service handler for 'load_journey_links'"""
+        
         journey_ref = service_data['journeyRef']
+
+        _LOGGER.debug("Fetching links for journey ref '%s'", journey_ref)
+
         data = self.engine.execute(
             """
 select
@@ -147,18 +156,18 @@ select
 from
 (
     select 
-        [sequenceNumber] = [SequenceNumber] - 1,
+        [sequenceNumber] = [SequenceNumber],
         [linkRef] = concat(lag(p.[StopPointNumber]) over (order by p.[SequenceNumber]), ':', p.[StopPointNumber]),
         [plannedTime] = datediff(second, lag(p.[PlannedDepartureDateTime]) over (order by p.[SequenceNumber]), p.[PlannedArrivalDateTime]),
         [totalDistance] = p.[PlannedJourneyDistanceMeters]
     from
-        [data].[RT_JourneyPoint] p
+        [data].[RT_JourneyPoint] p (nolock)
     where
         p.[JourneyRef] = ?
         and p.IsStopPoint = 1
 ) p
 where
-    p.[SequenceNumber] > 0
+    p.[SequenceNumber] > 1
 order by
     p.[SequenceNumber]
             """, journey_ref).fetchall()

@@ -32,6 +32,7 @@ async def test_mock_model():
     job = await node.services.async_call('schedule_train_model', {
         'model': 'MockModel',
         'time': '2020-07-28 00:00:00',
+        'spatialRef': 'L:1',
         'parameters': {}
     }, timeout=1)
 
