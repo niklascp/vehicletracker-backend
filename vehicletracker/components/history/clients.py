@@ -186,8 +186,8 @@ class MssqlHistoryDataSource(HistoryDataSource):
         from
             [data].[RT_JourneyPoint] [p] (nolock)
         where
-            [p].[OperatingDayDate] between dateadd(day, -1, '{0:}') and '{1:}'
-            and [p].[ObservedArrivalDateTime] between '{0:}' and '{1:}'
+            [p].[OperatingDayDate] between dateadd(day, -1, '{0:%Y-%m-%d}') and '{1:%Y-%m-%d}'
+            and [p].[ObservedArrivalDateTime] between '{0:%Y-%m-%d %H:%M:%S}' and '{1:%Y-%m-%d %H:%M:%S}'
             and [p].[ObservedArrivalDateTime] < [p].[ObservedDepartureDateTime]
             and [p].[IsStopPoint] = 1
         """.format(from_time, to_time)

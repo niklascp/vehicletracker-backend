@@ -105,8 +105,9 @@ from
     [data].[RT_Journey] j (nolock)
     join [dim].[JourneyPattern] jp on jp.[JourneyPatternId] = j.[JourneyPatternId] and jp.[IsCurrent] = 1
 where
-    --j.[LineNumber] in (10, 15, 150, 375)
-    j.[LineNumber] in (10, 375)
+    --j.[LineNumber] in (1, 2, 4, 5, 6, 7, 9, 10, 15, 150, 375)
+    j.[LineNumber] in (10, 15, 150, 375) and
+    j.[JourneyNumber] < 1000
     and getdate() between dateadd(minute, -15, [PlannedStartDateTime]) and [PlannedEndDateTime]
 order by
     [PlannedStartDateTime]
@@ -119,7 +120,11 @@ order by
 
     def load_journey_stops(self, service_data):
         """Service handler for 'load_journey_stops'. Load stops for a given journey."""
+        
         journey_ref = service_data['journeyRef']
+
+        _LOGGER.debug("Fetching stops for journey ref '%s'", journey_ref)
+
         data = self.engine.execute(
             """
 select 
@@ -139,7 +144,11 @@ where
 
     def load_journey_links(self, service_data):
         """Service handler for 'load_journey_links'"""
+        
         journey_ref = service_data['journeyRef']
+
+        _LOGGER.debug("Fetching links for journey ref '%s'", journey_ref)
+
         data = self.engine.execute(
             """
 select
@@ -152,7 +161,7 @@ from
         [plannedTime] = datediff(second, lag(p.[PlannedDepartureDateTime]) over (order by p.[SequenceNumber]), p.[PlannedArrivalDateTime]),
         [totalDistance] = p.[PlannedJourneyDistanceMeters]
     from
-        [data].[RT_JourneyPoint] p
+        [data].[RT_JourneyPoint] p (nolock)
     where
         p.[JourneyRef] = ?
         and p.IsStopPoint = 1

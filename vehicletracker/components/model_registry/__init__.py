@@ -30,6 +30,7 @@ async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):
     node.async_add_job(model_registry.restore_state)
     await node.services.async_register(DOMAIN, 'list_model_classes', model_registry.list_model_classes)
     await node.services.async_register(DOMAIN, 'list_models', model_registry.list_models)
+    await node.services.async_register(DOMAIN, 'delete_model', model_registry.delete_model)
     await node.services.async_register(DOMAIN, 'link_models', model_registry.list_models) #TODO: Rename in frontend
 
     await node.events.async_listen('model_available', model_registry.model_available)
@@ -70,6 +71,11 @@ class ModelRegitry():
         spatial_ref = service_data.get('spatialRef')
         time = datetime.fromisoformat(service_data.get('time')) if service_data.get('time') else None
         return self.model_store.list_models(model_name, spatial_ref, time)
+
+    def delete_model(self, service_data):        
+        """Service handler for 'delete_model'. Deletes a model given its reference."""
+        model_ref = service_data.get('modelRef')
+        return self.model_store.delete_model(model_ref)
 
     def model_available(self, event_name, event_data): 
         self.model_store.add_model(event_data['metadata'])

@@ -57,14 +57,19 @@ class Trainer():
     def schedule_train_model(self, params):
         """Schedule a new training of a model."""
         model_name = params['model']
-        time = datetime.fromisoformat(params['time'])
+        if params['time'] == 'latest':
+            time = datetime.now()
+            time_txt = 'latest'
+        else:
+            time = datetime.fromisoformat(params['time'])
+            time_txt = time.isoformat()
         spatial_ref = parse_spatial_ref(params['spatialRef'])
         model_parameters = params.get('parameters', {})
 
         model_class = self.model_registry.model_classes.get(model_name) # type: Type
         model_hash = hashlib.sha256(json.dumps({
             'model': model_name,
-            'time': time.isoformat(),
+            'time': time_txt,
             'spatialRef': str(spatial_ref),
             'parameters': model_parameters
             }, sort_keys=True).encode('utf-8')).digest()
@@ -101,13 +106,16 @@ class Trainer():
                     'model': model_name,
                     'type':  model.model_type(),
                     'spatialRef': str(spatial_ref),
-                    'spatialRefs': result['spatialRefs'],
-                    'time': time.isoformat(),
+                    'time': time_txt,
                     'trained': datetime.now().isoformat(),
                     'parameters': model_parameters,
                     'resourceUrl': model_local_path
                 }
 
+                # Legacy for models that specify a list of spatial references
+                if 'spatialRefs' in result:
+                    metadata['spatialRefs'] = result['spatialRefs']
+                    
                 model.save(self.model_registry.model_store, metadata)
 
                 # Write metadata

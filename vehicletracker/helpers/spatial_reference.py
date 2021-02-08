@@ -20,11 +20,11 @@ class SpatialRef():
 
     def __repr__(self):
         str_ = ''
-        if (self._line_refs):
+        if self._line_refs:
             str_ += 'L:' + self._line_refs[0] + '+'
-        if (self._stop_point_refs):
+        if self._stop_point_refs:
             str_ += 'SP:' + self._stop_point_refs[0] + '+'
-        if (self._link_refs):
+        if self._link_refs:
             str_ += 'LN:' + self._link_refs[0] + '+'
         return str_[:-1]
 

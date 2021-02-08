@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import (Any, Dict)
+from typing import (Any, Dict, List)
 import json
 from shapely import wkt
 from shapely.ops import linemerge
@@ -33,9 +33,12 @@ async def async_setup(node : VehicleTrackerNode, config : Dict[str, Any]):
     await node.services.async_register(DOMAIN, 'journey_details', monitor.journey_details)
     await node.services.async_register(DOMAIN, 'stop_points', monitor.list_stop_points)
     await node.services.async_register(DOMAIN, 'link_geometries', monitor.list_link_geometries)
+    await node.services.async_register(DOMAIN, 'model_errors', lambda _: monitor.model_errors)
+    await node.services.async_register(DOMAIN, 'model_weights', lambda _: monitor.model_weights)
     node.async_add_job(monitor.fetch_stop_points, utcnow())
     node.async_add_job(monitor.fetch_journeys, utcnow())
     await async_track_utc_time_change(node, monitor.fetch_journeys, hour='*', minute='*', second=0)
+    await async_track_utc_time_change(node, monitor.purge_data, hour='*', minute='*', second=0)
 
     return True
 
@@ -49,8 +52,10 @@ class Monitor():
                 self.journey_map = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e: 
             _LOGGER.warning('Failed to restore journey cache: %s', e)
-            self.journey_map = {}
+            self.journey_map = {}        
 
+        self.model_errors : Dict[str, List] = {} 
+        self.model_weights : Dict[str, Dict[str, float]] = {} 
         self.stop_points = {}
         self.link_geometries = {}
         self._json_encoder = DateTimeEncoder()
@@ -108,8 +113,21 @@ class Monitor():
         link['observedTime'] = event_data['travelTimeSeconds']
 
         if link.get('predictions') is not None:
+            ws = []
+            w_sum = 0
             for pred in link['predictions']:
-                pred['error'] = event_data['travelTimeSeconds'] - pred['predicted']                        
+                model_ref = pred['model_ref']
+                error = event_data['travelTimeSeconds'] - pred['predicted']  
+                pred['error'] = error
+                self.model_errors.setdefault(model_ref,[]).append({ 'time': datetime.utcnow(), 'error': error})
+                
+                w = 1/(1+error**2)
+                w_sum += w
+                ws.append((model_ref, w))
+
+            for (model_ref, w) in ws:
+                w_update = 0.2 * w/w_sum + 0.8 * self.model_weights.get(link_ref, {}).get(model_ref, 1/len(ws))
+                self.model_weights.setdefault(link_ref,{})[model_ref] = w_update
 
         if link.get('predictedTime') is not None:
             link['error'] = event_data['travelTimeSeconds'] - link['predictedTime']
@@ -154,16 +172,23 @@ class Monitor():
         link = journey['links'][index]
         link_predictions = await self.node.services.async_call('link_predict', { 'linkRef': link['linkRef'], 'time': as_local(departure_time) }) 
 
-        if len(link_predictions) == 0:
+        if 'error' in link_predictions or len(link_predictions) == 0:
             # Fallback to timetable
             predicted = link['plannedTime']
         else:
-            predicted = link_predictions[0]['predicted'] #TODO: Just dont take the first!
+            p_sum = 0
+            w_sum = 0
+            for p in link_predictions:
+                w = self.model_weights.get(link['linkRef'], {}).get(p['model_ref'], 1/len(link_predictions))                
+                p_sum += w * p['predicted']
+                w_sum += w
+                p['weight'] = w
+            predicted = p_sum / w_sum
+            link['predictions'] = link_predictions
 
         link['predictedTime'] = predicted
         link['predictedUpdated'] = utcnow().isoformat()
-        link['predictions'] = link_predictions
-
+        
         self.node.events.publish_local('estimated_arrival', {
             'journeyRef': journey_ref,
             'sequenceNumber': link['sequenceNumber'],
@@ -188,6 +213,10 @@ class Monitor():
             return    
 
         stop = journey['stops'][index]
+        if 'predictedArrivalUtc' in stop and stop['predictedArrivalUtc'] is not None:
+            delta = (arrival_time - parse_datetime(stop['predictedArrivalUtc'])).total_seconds() 
+        else:
+            delta = None
 
         if event_type == 'arrival':
             stop['observedArrivalUtc'] = arrival_time.isoformat()
@@ -198,6 +227,10 @@ class Monitor():
                 journey['state'] = 'Dwell'
         else:
             stop['predictedArrivalUtc'] = arrival_time.isoformat()
+
+        # Less than 30 second ajustment, do not progress updates
+        if delta is not None and abs(delta) < 1:
+            return
 
         # This is the final stop, no need for more
         if index + 1 >= len(journey['stops']):
@@ -210,16 +243,16 @@ class Monitor():
                 'delay': delay 
             })
 
-        if len(stop_predictions) == 0:
+        if 'error' in stop_predictions or len(stop_predictions) == 0:
             # Fallback to timetable
-            predicted = 0
+            predictedDepartureUtc = arrival_time
         else:
             predicted = stop_predictions[0]['predicted'] #TODO: Just dont take the first!
-        
-        predictedDepartureUtc = arrival_time + timedelta(seconds=predicted)
-        stop['predictedDwellTime'] = predicted
-        stop['predictedDepartureUtc'] = predictedDepartureUtc.isoformat()
-        stop['predictedUpdated'] = utcnow().isoformat()
+            predictedDepartureUtc = arrival_time + timedelta(seconds=predicted)
+            stop['predictions'] = stop_predictions
+            stop['predictedDwellTime'] = predicted
+            stop['predictedDepartureUtc'] = predictedDepartureUtc.isoformat()
+            stop['predictedUpdated'] = utcnow().isoformat()                    
 
         self.node.events.publish_local('estimated_departure', {
             'journeyRef': journey_ref,
@@ -300,19 +333,25 @@ class Monitor():
     def fetch_stop_points(self, utc_time):   
         self.stop_points = {str(x['stopPointRef']): x for x in self.node.services.call('load_stop_points')}
 
-    def fetch_journeys(self, utc_time):        
+    def fetch_journeys(self, utc_time):                
         journeys = self.node.services.call('load_journeys', { 'fromDateTime': '?' })
-
+        _LOGGER.info('Recived %s journeys from schedule_loader', len(journeys))
         new_journeys = 0
         for journey in journeys:
+            if new_journeys >= 100:
+                break
             if not journey['journeyRef'] in self.journey_map:
                 journey['stops'] = self.node.services.call('load_journey_stops', { 'journeyRef': journey['journeyRef'] })
                 journey['links'] = self.node.services.call('load_journey_links', { 'journeyRef': journey['journeyRef'] })
 
+                # Quick-fix for night gap when journeys are present, but links/stops are not:
+                if len(journey['links']) == 0 or journey['links'] == 0:
+                    continue
+
                 journey['sequenceToIndex'] = {str(item['sequenceNumber']): index for index, item in enumerate(journey['stops'])}
 
                 journey['added'] = utc_time
-                journey['totalDistance'] = journey['links'][-1]['totalDistance']                
+                journey['totalDistance'] = journey['links'][-1]['totalDistance']
                 self.journey_map[journey['journeyRef']] = journey
                 new_journeys += 1
 
@@ -338,3 +377,9 @@ class Monitor():
         # Dump cache if we stop...
         with open('cache/journeys.json', 'w') as f:
             f.write(self._json_encoder.encode(self.journey_map))
+
+    def purge_data(self, utc_time):
+        for model_ref in self.model_errors.keys():
+            while len(self.model_errors[model_ref]) > 500:
+                self.model_errors[model_ref].pop()
+

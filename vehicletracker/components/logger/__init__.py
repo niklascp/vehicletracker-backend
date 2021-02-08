@@ -2,6 +2,8 @@
 import logging
 import re
 
+from vehicletracker.core import VehicleTrackerNode
+
 DOMAIN = "logger"
 
 DATA_LOGGER = "logger"
@@ -64,7 +66,7 @@ class VehicleTrackerLogFilter(logging.Filter):
         return record.levelno >= self._default
 
 
-async def async_setup(hass, config):
+async def async_setup(node : VehicleTrackerNode, config):
     """Set up the logger component."""
     logfilter = {}
     vt_filter = VehicleTrackerLogFilter()
@@ -98,6 +100,9 @@ async def async_setup(hass, config):
 
     logger = logging.getLogger("")
     logger.setLevel(logging.NOTSET)
+
+    #handler = logging.handlers.TimedRotatingFileHandler(f'logs/vehicletracker-{node.name}', when="midnight", backupCount=14)
+    #logging.root.addHandler(handler)    
 
     # Set log filter for all log handler
     for handler in logging.root.handlers:
