@@ -6,8 +6,17 @@ This repository contain a novel framework for *multi-model* arrival prediction i
 
 The above illustrates the framework architecture which is building on proven methods for achieving a scalable and sustainable system and can be configured to consume computational power only when needed thus minimizing operational cost and climate footprint for public transport authorities using the system.
 
-## Backend Nodes
+## Backend
 This repository contain the backend of the framework, see [https://github.com/niklascp/vehicletracker-frontend](https://github.com/niklascp/vehicletracker-frontend) for the corresponding frontend written with AngularJS.
+
+### Configuration
+The system expect a environment variable ``RABBITMQ_URL`` with the connection information for RabbitMQ. If not provided it will try to connect to the local machine using the `guest` user. The latter is mainly intended for testing.
+
+```bash
+export RABBITMQ_URL=amqp://user:password@server:port//vhost
+```
+
+### Running nodes
 
 To start a vehicle tracker node, simply run the following, where ``configuration.yaml`` specifies which components to initiate on this node.
 ```
