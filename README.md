@@ -8,3 +8,8 @@ The above illustrates the framework architecture which is building on proven met
 
 ## Backend Nodes
 This repository contain the backend of the framework, see [https://github.com/niklascp/vehicletracker-frontend](https://github.com/niklascp/vehicletracker-frontend) for the corresponding frontend written with AngularJS.
+
+To start a vehicle tracker node, simply run the following, where ``configuration.yaml`` specifies which components to initiate on this node.
+```
+vehicletracker -c configuration.yaml
+```
